@@ -114,8 +114,12 @@ def _run_score() -> dict:
     """Stage: LLM scoring — assign fit scores 1-10."""
     try:
         from applypilot.scoring.scorer import run_scoring
-        run_scoring()
-        return {"status": "ok"}
+        result = run_scoring()
+        if result.get("errors", 0):
+            result["status"] = f"error: {result['errors']} scoring request(s) failed"
+        else:
+            result["status"] = "ok"
+        return result
     except Exception as e:
         log.error("Scoring failed: %s", e)
         return {"status": f"error: {e}"}

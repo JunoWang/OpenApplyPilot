@@ -245,33 +245,44 @@ def _setup_ai_features() -> None:
         console.print("[dim]Discovery-only mode. You can configure AI later with [bold]applypilot init[/bold].[/dim]")
         return
 
-    console.print("Supported providers: [bold]Gemini[/bold] (recommended, free tier), OpenAI, local (Ollama/llama.cpp)")
+    console.print(
+        "Supported providers: [bold]OpenAI, Claude (Anthropic), Gemini, Ollama[/bold]"
+    )
     provider = Prompt.ask(
         "Provider",
-        choices=["gemini", "openai", "local"],
-        default="gemini",
+        choices=["openai", "anthropic", "gemini", "ollama"],
+        default="openai",
     )
 
-    env_lines = ["# ApplyPilot configuration", ""]
+    env_lines = [
+        "# OpenApplyPilot configuration",
+        f"OPENAPPLYPILOT_LLM_PROVIDER={provider}",
+    ]
 
     if provider == "gemini":
         api_key = Prompt.ask("Gemini API key (from aistudio.google.com)")
         model = Prompt.ask("Model", default="gemini-2.0-flash")
         env_lines.append(f"GEMINI_API_KEY={api_key}")
-        env_lines.append(f"LLM_MODEL={model}")
+        env_lines.append(f"OPENAPPLYPILOT_LLM_MODEL={model}")
     elif provider == "openai":
         api_key = Prompt.ask("OpenAI API key")
         model = Prompt.ask("Model", default="gpt-4o-mini")
         env_lines.append(f"OPENAI_API_KEY={api_key}")
-        env_lines.append(f"LLM_MODEL={model}")
-    elif provider == "local":
-        url = Prompt.ask("Local LLM endpoint URL", default="http://localhost:8080/v1")
-        model = Prompt.ask("Model name", default="local-model")
-        env_lines.append(f"LLM_URL={url}")
-        env_lines.append(f"LLM_MODEL={model}")
+        env_lines.append(f"OPENAPPLYPILOT_LLM_MODEL={model}")
+    elif provider == "anthropic":
+        api_key = Prompt.ask("Anthropic API key")
+        model = Prompt.ask("Model", default="claude-sonnet-4-5")
+        env_lines.append(f"ANTHROPIC_API_KEY={api_key}")
+        env_lines.append(f"OPENAPPLYPILOT_LLM_MODEL={model}")
+    elif provider == "ollama":
+        url = Prompt.ask("Ollama base URL", default="http://127.0.0.1:11434")
+        model = Prompt.ask("Ollama model name", default="llama3.2")
+        env_lines.append(f"OLLAMA_BASE_URL={url}")
+        env_lines.append(f"OPENAPPLYPILOT_LLM_MODEL={model}")
 
     env_lines.append("")
     ENV_PATH.write_text("\n".join(env_lines), encoding="utf-8")
+    ENV_PATH.chmod(0o600)
     console.print(f"[green]AI configuration saved to {ENV_PATH}[/green]")
 
 
@@ -315,6 +326,7 @@ def _setup_auto_apply() -> None:
                 )
         else:
             ENV_PATH.write_text(f"# ApplyPilot configuration\nCAPSOLVER_API_KEY={capsolver_key}\n", encoding="utf-8")
+        ENV_PATH.chmod(0o600)
         console.print("[green]CapSolver key saved.[/green]")
     else:
         console.print("[dim]Skipped. Add CAPSOLVER_API_KEY to .env later if needed.[/dim]")
