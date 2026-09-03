@@ -5,11 +5,18 @@ import platform
 import shutil
 from pathlib import Path
 
-# User data directory — all user-specific files live here
-APP_DIR = Path(os.environ.get("APPLYPILOT_DIR", Path.home() / ".applypilot"))
+# User data directory — all user-specific files live here. APPLYPILOT_DIR is
+# retained as an override for tests and existing automation, but the default
+# location is intentionally separate from the upstream ApplyPilot install.
+LEGACY_APP_DIR = Path.home() / ".applypilot"
+APP_DIR = Path(
+    os.environ.get("OPENAPPLYPILOT_HOME")
+    or os.environ.get("APPLYPILOT_DIR")
+    or Path.home() / ".openapplypilot"
+).expanduser()
 
 # Core paths
-DB_PATH = APP_DIR / "applypilot.db"
+DB_PATH = APP_DIR / "openapplypilot.db"
 PROFILE_PATH = APP_DIR / "profile.json"
 RESUME_PATH = APP_DIR / "resume.txt"
 RESUME_PDF_PATH = APP_DIR / "resume.pdf"
@@ -20,6 +27,8 @@ ENV_PATH = APP_DIR / ".env"
 TAILORED_DIR = APP_DIR / "tailored_resumes"
 COVER_LETTER_DIR = APP_DIR / "cover_letters"
 LOG_DIR = APP_DIR / "logs"
+ARCHIVE_DIR = APP_DIR / "archives"
+PIPELINE_LOG_PATH = LOG_DIR / "openapplypilot.log"
 
 # Chrome worker isolation
 CHROME_WORKER_DIR = APP_DIR / "chrome-workers"
@@ -87,12 +96,21 @@ def get_chrome_user_data() -> Path:
 
 def ensure_dirs():
     """Create all required directories."""
-    for d in [APP_DIR, TAILORED_DIR, COVER_LETTER_DIR, LOG_DIR, CHROME_WORKER_DIR, APPLY_WORKER_DIR]:
+    for d in [
+        APP_DIR,
+        TAILORED_DIR,
+        COVER_LETTER_DIR,
+        LOG_DIR,
+        ARCHIVE_DIR,
+        CHROME_WORKER_DIR,
+        APPLY_WORKER_DIR,
+    ]:
         d.mkdir(parents=True, exist_ok=True)
+        d.chmod(0o700)
 
 
 def load_profile() -> dict:
-    """Load user profile from ~/.applypilot/profile.json."""
+    """Load the user profile from the configured local data directory."""
     import json
     if not PROFILE_PATH.exists():
         raise FileNotFoundError(
@@ -102,7 +120,7 @@ def load_profile() -> dict:
 
 
 def load_search_config() -> dict:
-    """Load search configuration from ~/.applypilot/searches.yaml."""
+    """Load search configuration from the configured local data directory."""
     import yaml
     if not SEARCH_CONFIG_PATH.exists():
         # Fall back to package-shipped example
@@ -172,7 +190,7 @@ DEFAULTS = {
 
 
 def load_env():
-    """Load environment variables from ~/.applypilot/.env if it exists."""
+    """Load environment variables from the local data directory."""
     from dotenv import load_dotenv
     if ENV_PATH.exists():
         load_dotenv(ENV_PATH)
@@ -247,8 +265,15 @@ def check_tier(required: int, feature: str) -> None:
     _console = Console(stderr=True)
 
     missing: list[str] = []
-    if required >= 2 and not any(os.environ.get(k) for k in ("GEMINI_API_KEY", "OPENAI_API_KEY", "LLM_URL")):
-        missing.append("LLM API key — run [bold]applypilot init[/bold] or set GEMINI_API_KEY")
+    llm_keys = (
+        "GEMINI_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OLLAMA_BASE_URL",
+        "LLM_URL",
+    )
+    if required >= 2 and not any(os.environ.get(key) for key in llm_keys):
+        missing.append("LLM provider — run [bold]applypilot init[/bold] to configure one")
     if required >= 3:
         if not shutil.which("claude"):
             missing.append("Claude Code CLI — install from [bold]https://claude.ai/code[/bold]")

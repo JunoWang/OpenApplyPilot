@@ -21,7 +21,7 @@ import yaml
 
 from applypilot import config
 from applypilot.config import CONFIG_DIR
-from applypilot.database import get_connection, init_db
+from applypilot.database import get_connection, init_db, save_jd_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -326,15 +326,32 @@ def store_results(conn: sqlite3.Connection, jobs: list[dict], employers: dict) -
 
         try:
             conn.execute(
-                "INSERT INTO jobs (url, title, salary, description, location, site, strategy, "
+                "INSERT INTO jobs (url, title, company, salary, description, location, site, strategy, "
                 "discovered_at, full_description, application_url, detail_scraped_at, detail_error) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (url, job.get("title"), None, short_desc, job.get("location"),
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (url, job.get("title"), site, None, short_desc, job.get("location"),
                  site, strategy, now, full_description, url, detail_scraped_at, detail_error),
+            )
+            if full_description:
+                save_jd_snapshot(
+                    conn,
+                    url,
+                    full_description,
+                    source_url=url,
+                    captured_at=now,
+                )
+            conn.execute(
+                "UPDATE jobs SET enrichment_status = ?, last_seen_at = ?, updated_at = ? "
+                "WHERE url = ?",
+                ("complete" if full_description else "pending", now, now, url),
             )
             new += 1
         except sqlite3.IntegrityError:
             existing += 1
+            conn.execute(
+                "UPDATE jobs SET last_seen_at = ?, updated_at = ? WHERE url = ?",
+                (now, now, url),
+            )
 
     conn.commit()
     return new, existing

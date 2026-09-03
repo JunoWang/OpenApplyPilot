@@ -1,6 +1,6 @@
 """ApplyPilot first-time setup wizard.
 
-Interactive flow that creates ~/.applypilot/ with:
+Interactive flow that creates ~/.openapplypilot/ with:
   - resume.txt (and optionally resume.pdf)
   - profile.json
   - searches.yaml

@@ -5,14 +5,13 @@ postings. All personal data (name, skills, achievements) comes from the user's
 profile at runtime. No hardcoded personal information.
 """
 
-import json
 import logging
 import re
 import time
 from datetime import datetime, timezone
 
 from applypilot.config import COVER_LETTER_DIR, RESUME_PATH, load_profile
-from applypilot.database import get_connection, get_jobs_by_stage
+from applypilot.database import get_connection
 from applypilot.llm import get_client
 from applypilot.scoring.validator import (
     BANNED_WORDS,
@@ -284,14 +283,16 @@ def run_cover_letters(min_score: int = 7, limit: int = 20,
         if r.get("path"):
             conn.execute(
                 "UPDATE jobs SET cover_letter_path=?, cover_letter_at=?, "
-                "cover_attempts=COALESCE(cover_attempts,0)+1 WHERE url=?",
-                (r["path"], now, r["url"]),
+                "cover_attempts=COALESCE(cover_attempts,0)+1, "
+                "cover_status='complete', cover_error=NULL, updated_at=? WHERE url=?",
+                (r["path"], now, now, r["url"]),
             )
             saved += 1
         else:
             conn.execute(
-                "UPDATE jobs SET cover_attempts=COALESCE(cover_attempts,0)+1 WHERE url=?",
-                (r["url"],),
+                "UPDATE jobs SET cover_attempts=COALESCE(cover_attempts,0)+1, "
+                "cover_status='error', cover_error=?, updated_at=? WHERE url=?",
+                (str(r.get("error") or "generation failed")[:1000], now, r["url"]),
             )
     conn.commit()
 

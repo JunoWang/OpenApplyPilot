@@ -22,9 +22,7 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
-from applypilot import config
-from applypilot.config import DB_PATH
-from applypilot.database import get_connection, init_db, ensure_columns
+from applypilot.database import init_db, save_jd_snapshot
 from applypilot.llm import get_client
 
 log = logging.getLogger(__name__)
@@ -663,15 +661,31 @@ def scrape_site_batch(
 
                 if status in ("ok", "partial"):
                     stats[status] += 1
+                    description = result.get("full_description")
                     conn.execute(
                         "UPDATE jobs SET full_description = ?, application_url = ?, "
-                        "detail_scraped_at = ?, detail_error = NULL WHERE url = ?",
-                        (result.get("full_description"), result.get("application_url"), now, url),
+                        "detail_scraped_at = ?, detail_error = NULL, enrichment_status = ? "
+                        "WHERE url = ?",
+                        (
+                            description,
+                            result.get("application_url"),
+                            now,
+                            "complete" if description else "partial",
+                            url,
+                        ),
+                    )
+                    save_jd_snapshot(
+                        conn,
+                        url,
+                        description,
+                        source_url=result.get("application_url") or url,
+                        captured_at=now,
                     )
                 else:
                     stats["error"] += 1
                     conn.execute(
-                        "UPDATE jobs SET detail_error = ?, detail_scraped_at = ? WHERE url = ?",
+                        "UPDATE jobs SET detail_error = ?, detail_scraped_at = ?, "
+                        "enrichment_status = 'error' WHERE url = ?",
                         (result.get("error", "unknown"), now, url),
                     )
 

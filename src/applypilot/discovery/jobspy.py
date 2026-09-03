@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from jobspy import scrape_jobs
 
 from applypilot import config
-from applypilot.database import get_connection, init_db, store_jobs
+from applypilot.database import get_connection, init_db, save_jd_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -168,15 +168,32 @@ def store_jobspy_results(conn: sqlite3.Connection, df, source_label: str) -> tup
 
         try:
             conn.execute(
-                "INSERT INTO jobs (url, title, salary, description, location, site, strategy, discovered_at, "
+                "INSERT INTO jobs (url, title, company, salary, description, location, site, strategy, discovered_at, "
                 "full_description, application_url, detail_scraped_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (url, title, salary, description, location_str, site_label, strategy, now,
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (url, title, company, salary, description, location_str, site_label, strategy, now,
                  full_description, apply_url, detail_scraped_at),
+            )
+            if full_description:
+                save_jd_snapshot(
+                    conn,
+                    url,
+                    full_description,
+                    source_url=apply_url or url,
+                    captured_at=now,
+                )
+            conn.execute(
+                "UPDATE jobs SET enrichment_status = ?, last_seen_at = ?, updated_at = ? "
+                "WHERE url = ?",
+                ("complete" if full_description else "pending", now, now, url),
             )
             new += 1
         except sqlite3.IntegrityError:
             existing += 1
+            conn.execute(
+                "UPDATE jobs SET last_seen_at = ?, updated_at = ? WHERE url = ?",
+                (now, now, url),
+            )
 
     conn.commit()
     return new, existing

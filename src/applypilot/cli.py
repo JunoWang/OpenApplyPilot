@@ -35,11 +35,13 @@ VALID_STAGES = ("discover", "enrich", "score", "tailor", "cover", "pdf")
 
 def _bootstrap() -> None:
     """Common setup: load env, create dirs, init DB."""
-    from applypilot.config import load_env, ensure_dirs
+    from applypilot.config import ensure_dirs, load_env
     from applypilot.database import init_db
+    from applypilot.logging_setup import configure_file_logging
 
     load_env()
     ensure_dirs()
+    configure_file_logging()
     init_db()
 
 
@@ -71,6 +73,51 @@ def init() -> None:
     from applypilot.wizard.init import run_wizard
 
     run_wizard()
+
+
+@app.command()
+def migrate(
+    source_dir: str = typer.Option(
+        "~/.applypilot",
+        "--from-dir",
+        help="Legacy ApplyPilot data directory.",
+    ),
+    target_dir: Optional[str] = typer.Option(
+        None,
+        "--to-dir",
+        help="OpenApplyPilot data directory (defaults to ~/.openapplypilot).",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Inspect source data without creating or changing files.",
+    ),
+) -> None:
+    """Safely archive and migrate legacy jobs and JD snapshots."""
+    from pathlib import Path
+
+    from applypilot.config import APP_DIR
+    from applypilot.migration import migrate_legacy_data
+
+    report = migrate_legacy_data(
+        legacy_dir=Path(source_dir),
+        target_dir=Path(target_dir).expanduser() if target_dir else APP_DIR,
+        dry_run=dry_run,
+    )
+
+    title = "Migration preview" if dry_run else "Migration complete"
+    console.print(f"\n[bold green]{title}[/bold green]")
+    console.print(f"  Source jobs:    {report.source_jobs}")
+    console.print(f"  Imported jobs:  {report.imported_jobs}")
+    console.print(f"  Skipped jobs:   {report.skipped_jobs}")
+    console.print(f"  JD snapshots:   {report.jd_snapshots}")
+    console.print(f"  New database:   {report.target_db}")
+    if report.archive_db:
+        console.print(f"  Legacy archive: {report.archive_db}")
+        console.print("  Original data:  preserved (not deleted)")
+    if report.copied_files:
+        console.print(f"  Copied files:   {', '.join(report.copied_files)}")
+    console.print()
 
 
 @app.command()
@@ -211,7 +258,7 @@ def apply(
             raise typer.Exit(code=1)
 
     if gen:
-        from applypilot.apply.launcher import gen_prompt, BASE_CDP_PORT
+        from applypilot.apply.launcher import gen_prompt
         target = url or ""
         if not target:
             console.print("[red]--gen requires --url to specify which job.[/red]")
@@ -222,7 +269,7 @@ def apply(
             raise typer.Exit(code=1)
         mcp_path = _profile_path.parent / ".mcp-apply-0.json"
         console.print(f"[green]Wrote prompt to:[/green] {prompt_file}")
-        console.print(f"\n[bold]Run manually:[/bold]")
+        console.print("\n[bold]Run manually:[/bold]")
         console.print(
             f"  claude --model {model} -p "
             f"--mcp-config {mcp_path} "
@@ -265,7 +312,12 @@ def status() -> None:
 
     stats = get_stats()
 
-    console.print("\n[bold]ApplyPilot Pipeline Status[/bold]\n")
+    from applypilot.config import APP_DIR, DB_PATH, PIPELINE_LOG_PATH
+
+    console.print("\n[bold]OpenApplyPilot Pipeline Status[/bold]")
+    console.print(f"[dim]Data: {APP_DIR}[/dim]")
+    console.print(f"[dim]Database: {DB_PATH}[/dim]")
+    console.print(f"[dim]Log: {PIPELINE_LOG_PATH}[/dim]\n")
 
     # Summary table
     summary = Table(title="Pipeline Overview", show_header=True, header_style="bold cyan")
@@ -284,6 +336,9 @@ def status() -> None:
     summary.add_row("Ready to apply", str(stats["ready_to_apply"]))
     summary.add_row("Applied", str(stats["applied"]))
     summary.add_row("Apply errors", str(stats["apply_errors"]))
+    summary.add_row("JD snapshots", str(stats["jd_snapshots"]))
+    summary.add_row("Pipeline runs", str(stats["pipeline_runs"]))
+    summary.add_row("Application records", str(stats["applications"]))
 
     console.print(summary)
 
@@ -337,8 +392,15 @@ def doctor() -> None:
     """Check your setup and diagnose missing requirements."""
     import shutil
     from applypilot.config import (
-        load_env, PROFILE_PATH, RESUME_PATH, RESUME_PDF_PATH,
-        SEARCH_CONFIG_PATH, ENV_PATH, get_chrome_path,
+        APP_DIR,
+        DB_PATH,
+        PIPELINE_LOG_PATH,
+        PROFILE_PATH,
+        RESUME_PATH,
+        RESUME_PDF_PATH,
+        SEARCH_CONFIG_PATH,
+        get_chrome_path,
+        load_env,
     )
 
     load_env()
@@ -348,6 +410,10 @@ def doctor() -> None:
     warn_mark = "[yellow]WARN[/yellow]"
 
     results: list[tuple[str, str, str]] = []  # (check, status, note)
+
+    results.append(("Data directory", ok_mark if APP_DIR.exists() else fail_mark, str(APP_DIR)))
+    results.append(("Database", ok_mark if DB_PATH.exists() else fail_mark, str(DB_PATH)))
+    results.append(("Pipeline log", ok_mark if PIPELINE_LOG_PATH.exists() else warn_mark, str(PIPELINE_LOG_PATH)))
 
     # --- Tier 1 checks ---
     # Profile

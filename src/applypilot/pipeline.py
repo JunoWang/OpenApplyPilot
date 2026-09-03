@@ -12,6 +12,7 @@ Usage (via CLI):
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -21,8 +22,16 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from applypilot.config import load_env, ensure_dirs
-from applypilot.database import init_db, get_connection, get_stats
+from applypilot.config import PIPELINE_LOG_PATH, ensure_dirs, load_env
+from applypilot.database import (
+    create_pipeline_run,
+    finish_pipeline_run,
+    get_connection,
+    get_stats,
+    init_db,
+    record_stage_event,
+)
+from applypilot.logging_setup import configure_file_logging
 
 log = logging.getLogger(__name__)
 console = Console()
@@ -388,7 +397,7 @@ def _run_streaming(ordered: list[str], min_score: int, workers: int = 1,
     stop_event = threading.Event()
     pipeline_start = time.time()
 
-    console.print(f"\n  [bold cyan]STREAMING MODE[/bold cyan] — stages run concurrently")
+    console.print("\n  [bold cyan]STREAMING MODE[/bold cyan] — stages run concurrently")
     console.print(f"  Poll interval: {_STREAM_POLL_INTERVAL}s\n")
 
     # Mark stages NOT in `ordered` as done so downstream doesn't wait for them
@@ -468,6 +477,7 @@ def run_pipeline(
     # Bootstrap
     load_env()
     ensure_dirs()
+    configure_file_logging()
     init_db()
 
     # Resolve stages
@@ -477,6 +487,23 @@ def run_pipeline(
 
     # Banner
     mode = "streaming" if stream else "sequential"
+    run_id = create_pipeline_run(
+        ordered,
+        mode=mode,
+        config={
+            "min_score": min_score,
+            "workers": workers,
+            "validation_mode": validation_mode,
+            "dry_run": dry_run,
+        },
+        log_path=str(PIPELINE_LOG_PATH),
+    )
+    log.info(
+        "Pipeline run started id=%s mode=%s stages=%s",
+        run_id,
+        mode,
+        ",".join(ordered),
+    )
     console.print()
     console.print(Panel.fit(
         f"[bold]ApplyPilot Pipeline[/bold] ({mode})",
@@ -496,16 +523,58 @@ def run_pipeline(
         for name in ordered:
             meta = STAGE_META[name]
             console.print(f"    {name:<12s}  {meta['desc']}")
-        console.print(f"\n  No changes made.")
-        return {"stages": [], "errors": {}, "elapsed": 0.0}
+        console.print("\n  No changes made.")
+        for name in ordered:
+            record_stage_event(run_id, name, "dry_run")
+        finish_pipeline_run(run_id, "completed")
+        log.info("Pipeline dry-run completed id=%s", run_id)
+        return {"run_id": run_id, "stages": [], "errors": {}, "elapsed": 0.0}
 
     # Execute
-    if stream:
-        result = _run_streaming(ordered, min_score, workers=workers,
-                                validation_mode=validation_mode)
-    else:
-        result = _run_sequential(ordered, min_score, workers=workers,
-                                 validation_mode=validation_mode)
+    try:
+        if stream:
+            result = _run_streaming(
+                ordered,
+                min_score,
+                workers=workers,
+                validation_mode=validation_mode,
+            )
+        else:
+            result = _run_sequential(
+                ordered,
+                min_score,
+                workers=workers,
+                validation_mode=validation_mode,
+            )
+    except KeyboardInterrupt:
+        record_stage_event(run_id, "pipeline", "interrupted")
+        finish_pipeline_run(run_id, "interrupted", error_summary="KeyboardInterrupt")
+        raise
+    except Exception as exc:
+        record_stage_event(run_id, "pipeline", "failed", message=str(exc)[:1000])
+        finish_pipeline_run(run_id, "failed", error_summary=str(exc)[:1000])
+        raise
+
+    for stage_result in result["stages"]:
+        record_stage_event(
+            run_id,
+            stage_result["stage"],
+            stage_result["status"],
+            metadata={"elapsed": stage_result["elapsed"]},
+        )
+        log.info(
+            "Pipeline stage completed id=%s stage=%s status=%s elapsed=%.3fs",
+            run_id,
+            stage_result["stage"],
+            stage_result["status"],
+            stage_result["elapsed"],
+        )
+
+    final_status = "failed" if result["errors"] else "completed"
+    error_summary = json.dumps(result["errors"], sort_keys=True) if result["errors"] else None
+    finish_pipeline_run(run_id, final_status, error_summary=error_summary)
+    log.info("Pipeline run finished id=%s status=%s", run_id, final_status)
+    result["run_id"] = run_id
 
     # Summary table
     console.print(f"\n{'=' * 70}")
@@ -531,7 +600,7 @@ def run_pipeline(
 
     # Final DB stats
     final = get_stats()
-    console.print(f"\n  [bold]DB Final State:[/bold]")
+    console.print("\n  [bold]DB Final State:[/bold]")
     console.print(f"    Total jobs:     {final['total']}")
     console.print(f"    With desc:      {final['with_description']}")
     console.print(f"    Scored:         {final['scored']}")

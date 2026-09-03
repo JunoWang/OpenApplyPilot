@@ -149,14 +149,22 @@ def run_scoring(limit: int = 0, rescore: bool = False) -> dict:
             )
             # Leave fit_score NULL so this job stays retryable. A provider
             # failure must never masquerade as a legitimate zero score.
+            conn.execute(
+                "UPDATE jobs SET score_status = 'error', score_error = ?, updated_at = ? "
+                "WHERE url = ?",
+                (str(exc)[:1000], datetime.now(timezone.utc).isoformat(), job["url"]),
+            )
+            conn.commit()
             continue
 
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
-            "UPDATE jobs SET fit_score = ?, score_reasoning = ?, scored_at = ? WHERE url = ?",
+            "UPDATE jobs SET fit_score = ?, score_reasoning = ?, scored_at = ?, "
+            "score_status = 'complete', score_error = NULL, updated_at = ? WHERE url = ?",
             (
                 result["score"],
                 f"{result['keywords']}\n{result['reasoning']}",
+                now,
                 now,
                 job["url"],
             ),
