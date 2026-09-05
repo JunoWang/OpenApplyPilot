@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from pathlib import Path
 
 from docx import Document
@@ -10,11 +11,12 @@ from applypilot.scoring.pdf import (
     parse_resume,
 )
 from applypilot.scoring.tailor import (
+    _extract_project_identities,
     assemble_resume_text,
     build_diff_report,
     build_unified_diff,
 )
-from applypilot.scoring.validator import validate_tailored_resume
+from applypilot.scoring.validator import validate_json_fields, validate_tailored_resume
 
 MASTER_RESUME = """Juno Wang
 AI Researcher
@@ -130,6 +132,49 @@ def test_source_grounded_validation_rejects_new_skill_and_number() -> None:
     assert result["passed"] is False
     assert any("Kubernetes" in error for error in result["errors"])
     assert any("95%" in error for error in result["errors"])
+
+
+def test_project_identity_is_immutable() -> None:
+    identities = _extract_project_identities(MASTER_RESUME)
+    assert identities == [
+        {"header": "Research Copilot", "subtitle": "Python, RAG | 2026"}
+    ]
+
+    accepted_data = deepcopy(TAILORED_DATA)
+    accepted_data["education"] = "University at Buffalo"
+    accepted = validate_json_fields(
+        accepted_data,
+        PROFILE,
+        source_projects=identities,
+    )
+    assert accepted["passed"] is True
+
+    renamed = deepcopy(accepted_data)
+    renamed["projects"][0]["header"] = "Research Copilot for Job Search"
+    rejected = validate_json_fields(
+        renamed,
+        PROFILE,
+        source_projects=identities,
+    )
+    assert rejected["passed"] is False
+    assert any("Project identity" in error for error in rejected["errors"])
+
+
+def test_full_validation_rejects_renamed_project() -> None:
+    renamed = _tailored_text().replace(
+        "\nResearch Copilot\n",
+        "\nResearch Copilot for Job Search\n",
+    )
+
+    result = validate_tailored_resume(
+        renamed,
+        PROFILE,
+        original_text=MASTER_RESUME,
+        mode="normal",
+    )
+
+    assert result["passed"] is False
+    assert any("Project name must be preserved exactly" in error for error in result["errors"])
 
 
 def test_diff_report_is_auditable() -> None:

@@ -34,7 +34,11 @@ MAX_ATTEMPTS = 5  # max cross-run retries before giving up
 
 # ── Prompt Builders (profile-driven) ──────────────────────────────────────
 
-def _build_tailor_prompt(profile: dict, original_skills: str) -> str:
+def _build_tailor_prompt(
+    profile: dict,
+    original_skills: str,
+    source_projects: list[dict[str, str]],
+) -> str:
     """Build the resume tailoring system prompt from the user's profile.
 
     All skills boundaries, preserved entities, and formatting rules are
@@ -53,6 +57,10 @@ def _build_tailor_prompt(profile: dict, original_skills: str) -> str:
     # Include ALL banned words from the validator so the LLM knows exactly
     # what will be rejected — the validator checks for these automatically.
     banned_str = ", ".join(BANNED_WORDS)
+    project_identities = "\n".join(
+        f'- header: "{project["header"]}"; subtitle: "{project["subtitle"]}"'
+        for project in source_projects
+    ) or "No projects were found in the original resume."
 
     return f"""You are a senior technical recruiter rewriting a resume to get this person an interview.
 
@@ -81,7 +89,14 @@ SKILLS: Reorder each category so the job's must-haves appear first.
 
 Reframe EVERY bullet for this role. Same real work, different angle. Every bullet must be reworded. Never copy verbatim.
 
-PROJECTS: Reorder by relevance. Drop irrelevant projects entirely.
+PROJECTS: Keep every source project. Reorder by relevance and rewrite only the bullets.
+
+IMMUTABLE PROJECT IDENTITIES:
+{project_identities}
+
+Keep every source project. You may reorder projects and rewrite their bullets,
+but each project's `header` and `subtitle` must exactly match the values above.
+Never rename a project, add a descriptor to its name, or change its dates.
 
 BULLETS: Strong verb + what you built + quantified impact. Vary verbs (Built, Designed, Implemented, Reduced, Automated, Deployed, Operated, Optimized). Most relevant first. Max 4 per section.
 
@@ -99,6 +114,7 @@ BULLETS: Strong verb + what you built + quantified impact. Vary verbs (Built, De
 - Preserved companies: {companies_str} -- names stay as-is
 - Preserved school: {school}
 - Copy the EDUCATION section exactly from the original resume
+- Preserve every project header and subtitle exactly as written in the original resume
 - Prefer 1 page when the source content permits. A readable 2-page resume is
   acceptable for research or academic profiles; never drop source-grounded
   education or publications merely to force one page.
@@ -206,6 +222,36 @@ def _extract_section(text: str, section_name: str) -> str:
     )
     match = pattern.search(text)
     return match.group(1).strip() if match else ""
+
+
+def _extract_project_identities(resume_text: str) -> list[dict[str, str]]:
+    """Extract immutable project headers and subtitles from the master resume."""
+    section = _extract_section(resume_text, "PROJECTS")
+    entries: list[dict[str, object]] = []
+    current: dict[str, object] | None = None
+
+    for raw_line in section.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith(("- ", "• ")):
+            if current is not None:
+                current["has_bullets"] = True
+            continue
+        if current is None or current["has_bullets"]:
+            current = {"header": line, "subtitle": "", "has_bullets": False}
+            entries.append(current)
+        elif not current["subtitle"]:
+            current["subtitle"] = line
+
+    identities: list[dict[str, str]] = []
+    for entry in entries:
+        header = str(entry["header"]).strip()
+        subtitle = str(entry["subtitle"]).strip()
+        if not subtitle and "|" in header:
+            header, subtitle = (part.strip() for part in header.split("|", 1))
+        identities.append({"header": header, "subtitle": subtitle})
+    return identities
 
 
 def build_diff_report(original_text: str, tailored_text: str) -> dict:
@@ -433,9 +479,15 @@ def tailor_resume(
         _extract_section(resume_text, "SKILLS")
         or _extract_section(resume_text, "TECHNICAL SKILLS")
     )
-    tailor_prompt_base = _build_tailor_prompt(profile, original_skills)
+    source_projects = _extract_project_identities(resume_text)
+    tailor_prompt_base = _build_tailor_prompt(
+        profile,
+        original_skills,
+        source_projects,
+    )
     original_education = _extract_section(resume_text, "EDUCATION")
     original_publications = _extract_section(resume_text, "PUBLICATIONS")
+    report["immutable_project_identities"] = source_projects
 
     for attempt in range(max_retries + 1):
         report["attempts"] = attempt + 1
@@ -462,7 +514,12 @@ def tailor_resume(
             continue
 
         # Layer 1: Validate JSON fields
-        validation = validate_json_fields(data, profile, mode=validation_mode)
+        validation = validate_json_fields(
+            data,
+            profile,
+            mode=validation_mode,
+            source_projects=source_projects,
+        )
         report["validator"] = validation
 
         if not validation["passed"]:

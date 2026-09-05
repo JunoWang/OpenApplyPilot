@@ -171,6 +171,10 @@ AI scores every job 1-10 against your profile. 9-10 = strong match, 7-8 = good, 
 ### Tailor
 Generates a custom resume per job: reorders experience, emphasizes relevant skills, incorporates keywords from the job description. Your `resume_facts` (companies, projects, metrics) are preserved exactly. The AI reorganizes but never fabricates.
 
+Project names and their subtitles or dates are immutable. Tailoring can reorder
+projects and rewrite supported bullet points, but any renamed, omitted, or newly
+invented project fails validation before DOCX/PDF export.
+
 ### Cover Letter
 Writes a targeted cover letter per job referencing the specific company, role, and how your experience maps to their requirements.
 

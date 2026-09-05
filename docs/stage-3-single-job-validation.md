@@ -24,18 +24,23 @@ resume, validates numeric claims only in resume content, preserves education and
 publications from the source, and requires both deterministic validation and the
 LLM factuality judge to pass. The retry then completed successfully.
 
+Project names and their attached subtitles or dates are immutable. Tailoring may
+reorder projects and rewrite source-grounded bullets, but it must preserve every
+project identity exactly. A renamed, omitted, or newly invented project fails
+validation and never reaches export.
+
 ## Acceptance evidence
 
 - Fit score: 7/10.
 - Tailoring generation attempts: 1 on the successful retry.
 - Deterministic validator: pass.
-- Full source-grounded validator: pass, with one non-blocking renamed-project warning.
+- Full source-grounded validator: pass with no project-identity warning.
 - LLM factuality judge: pass.
 - Export: private TXT, one-page DOCX, and one-page searchable PDF plus JD,
   unified diff, and JSON report. Both rendered formats passed visual inspection.
 - Database: the full JD and all artifact paths remain available for interview preparation.
 - Submission: not attempted; `apply_status` remains unset.
-- Automated suite: 24 tests, including targeted-run isolation, source-grounded
+- Automated suite: 26 tests, including targeted-run isolation, source-grounded
   validation, audit diff generation, HTML escaping, and ATS-oriented DOCX structure.
 
 Run IDs and timestamps are retained locally in `pipeline_runs` and

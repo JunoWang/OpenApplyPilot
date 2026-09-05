@@ -96,7 +96,12 @@ def sanitize_text(text: str) -> str:
 
 # ── JSON Field Validation ─────────────────────────────────────────────────
 
-def validate_json_fields(data: dict, profile: dict, mode: str = "normal") -> dict:
+def validate_json_fields(
+    data: dict,
+    profile: dict,
+    mode: str = "normal",
+    source_projects: list[dict[str, str]] | None = None,
+) -> dict:
     """Validate individual JSON fields from an LLM-generated tailored resume.
 
     Args:
@@ -106,6 +111,7 @@ def validate_json_fields(data: dict, profile: dict, mode: str = "normal") -> dic
                  strict  → banned words are errors (trigger retries)
                  normal  → banned words are warnings (no retry)
                  lenient → banned words ignored entirely
+        source_projects: Exact project headers and subtitles from the master resume.
 
     Returns:
         {"passed": bool, "errors": list[str], "warnings": list[str]}
@@ -154,6 +160,28 @@ def validate_json_fields(data: dict, profile: dict, mode: str = "normal") -> dic
         for entry in data["projects"]:
             for b in entry.get("bullets", []):
                 all_text_parts.append(b)
+        if source_projects:
+            generated_projects = {
+                (
+                    str(entry.get("header", "")).strip(),
+                    str(entry.get("subtitle", "")).strip(),
+                )
+                for entry in data["projects"]
+            }
+            allowed_projects = {
+                (project["header"], project["subtitle"])
+                for project in source_projects
+            }
+            for header, subtitle in sorted(allowed_projects - generated_projects):
+                errors.append(
+                    "Project identity must be preserved exactly: "
+                    f"header='{header}', subtitle='{subtitle}'"
+                )
+            for header, subtitle in sorted(generated_projects - allowed_projects):
+                errors.append(
+                    "Project identity is not present in the original resume: "
+                    f"header='{header}', subtitle='{subtitle}'"
+                )
 
     # Education: preserved school must be present (always enforced)
     preserved_school = resume_facts.get("preserved_school", "")
@@ -250,10 +278,27 @@ def validate_tailored_resume(
         if company.lower() not in text_lower:
             errors.append(f"Company '{company}' missing -- cannot remove real experience")
 
-    # 4. Check projects preserved
+    # 4. Project names and their attached dates are immutable facts.
+    project_block = _section_text(text, "PROJECTS", "PUBLICATIONS")
+    if not project_block:
+        project_block = _section_text(text, "PROJECTS", "EDUCATION")
+    project_lines = {
+        line.strip().lower()
+        for line in project_block.splitlines()
+        if line.strip()
+    }
     for project in resume_facts.get("preserved_projects", []):
-        if project.lower() not in text_lower:
-            warnings.append(f"Project '{project}' not found -- may have been renamed")
+        identity = [part.strip() for part in project.split("|", 1)]
+        project_name = identity[0]
+        project_subtitle = identity[1] if len(identity) > 1 else ""
+        if project_name.lower() not in project_lines:
+            errors.append(
+                f"Project name must be preserved exactly: '{project_name}'"
+            )
+        if project_subtitle and project_subtitle.lower() not in project_lines:
+            errors.append(
+                f"Project subtitle must be preserved exactly: '{project_subtitle}'"
+            )
 
     # 5. Check school preserved
     preserved_school = resume_facts.get("preserved_school", "")
@@ -287,7 +332,7 @@ def validate_tailored_resume(
         original_lower = original_text.lower()
         original_skills = _section_text(original_text, "TECHNICAL SKILLS", "EXPERIENCE")
         if not original_skills:
-            original_skills = _section_text(original_text, "SKILLS")
+            original_skills = _section_text(original_text, "SKILLS", "EXPERIENCE")
         tailored_skills = _section_text(text, "TECHNICAL SKILLS", "EXPERIENCE")
         for line in tailored_skills.splitlines():
             if ":" not in line:
