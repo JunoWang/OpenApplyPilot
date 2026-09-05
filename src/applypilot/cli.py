@@ -134,6 +134,8 @@ def run(
     workers: int = typer.Option(1, "--workers", "-w", help="Parallel threads for discovery/enrichment stages."),
     stream: bool = typer.Option(False, "--stream", help="Run stages concurrently (streaming mode)."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview stages without executing."),
+    limit: int = typer.Option(20, "--limit", "-l", min=1, help="Maximum jobs for score/tailor/cover/pdf."),
+    url: Optional[str] = typer.Option(None, "--url", help="Restrict score/tailor/cover/pdf to one exact job URL."),
     validation: str = typer.Option(
         "normal",
         "--validation",
@@ -161,6 +163,16 @@ def run(
             )
             raise typer.Exit(code=1)
 
+    if url and ("all" in stage_list or {"discover", "enrich"}.intersection(stage_list)):
+        console.print(
+            "[red]--url supports score, tailor, cover, and pdf only.[/red] "
+            "Choose those stages explicitly."
+        )
+        raise typer.Exit(code=1)
+    if url and stream:
+        console.print("[red]--url cannot be combined with --stream.[/red]")
+        raise typer.Exit(code=1)
+
     # Gate AI stages behind Tier 2
     llm_stages = {"score", "tailor", "cover"}
     if any(s in stage_list for s in llm_stages) or "all" in stage_list:
@@ -183,6 +195,8 @@ def run(
         stream=stream,
         workers=workers,
         validation_mode=validation,
+        limit=limit,
+        job_url=url,
     )
 
     if result.get("errors"):
@@ -208,7 +222,8 @@ def apply(
     """Launch auto-apply to submit job applications."""
     _bootstrap()
 
-    from applypilot.config import check_tier, PROFILE_PATH as _profile_path
+    from applypilot.config import PROFILE_PATH as _profile_path
+    from applypilot.config import check_tier
     from applypilot.database import get_connection
 
     # --- Utility modes (no Chrome/Claude needed) ---
@@ -391,6 +406,7 @@ def dashboard() -> None:
 def doctor() -> None:
     """Check your setup and diagnose missing requirements."""
     import shutil
+
     from applypilot.config import (
         APP_DIR,
         DB_PATH,
@@ -504,7 +520,7 @@ def doctor() -> None:
     console.print()
 
     # Tier summary
-    from applypilot.config import get_tier, TIER_LABELS
+    from applypilot.config import TIER_LABELS, get_tier
     tier = get_tier()
     console.print(f"[bold]Current tier: Tier {tier} — {TIER_LABELS[tier]}[/bold]")
 

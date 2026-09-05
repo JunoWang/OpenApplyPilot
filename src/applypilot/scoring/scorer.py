@@ -85,7 +85,7 @@ def score_job(resume_text: str, job: dict) -> dict:
     """
     job_text = (
         f"TITLE: {job['title']}\n"
-        f"COMPANY: {job['site']}\n"
+        f"COMPANY: {job.get('company') or job['site']}\n"
         f"LOCATION: {job.get('location', 'N/A')}\n\n"
         f"DESCRIPTION:\n{(job.get('full_description') or '')[:6000]}"
     )
@@ -100,12 +100,17 @@ def score_job(resume_text: str, job: dict) -> dict:
     return _parse_score_response(response)
 
 
-def run_scoring(limit: int = 0, rescore: bool = False) -> dict:
+def run_scoring(
+    limit: int = 0,
+    rescore: bool = False,
+    job_url: str | None = None,
+) -> dict:
     """Score unscored jobs that have full descriptions.
 
     Args:
         limit: Maximum number of jobs to score in this run.
         rescore: If True, re-score all jobs (not just unscored ones).
+        job_url: When provided, score only the matching job.
 
     Returns:
         {"scored": int, "errors": int, "elapsed": float, "distribution": list}
@@ -115,11 +120,21 @@ def run_scoring(limit: int = 0, rescore: bool = False) -> dict:
 
     if rescore:
         query = "SELECT * FROM jobs WHERE full_description IS NOT NULL"
+        params: list[str | int] = []
+        if job_url:
+            query += " AND url = ?"
+            params.append(job_url)
         if limit > 0:
-            query += f" LIMIT {limit}"
-        jobs = conn.execute(query).fetchall()
+            query += " LIMIT ?"
+            params.append(limit)
+        jobs = conn.execute(query, params).fetchall()
     else:
-        jobs = get_jobs_by_stage(conn=conn, stage="pending_score", limit=limit)
+        jobs = get_jobs_by_stage(
+            conn=conn,
+            stage="pending_score",
+            limit=limit,
+            job_url=job_url,
+        )
 
     if not jobs:
         log.info("No unscored jobs with descriptions found.")

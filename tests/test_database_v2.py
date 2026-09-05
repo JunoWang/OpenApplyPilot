@@ -35,6 +35,14 @@ def test_v2_schema_and_jd_snapshot_history(tmp_path) -> None:
         "system_metadata",
         "schema_migrations",
     }.issubset(table_names)
+    job_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+    }
+    assert {
+        "tailored_docx_path",
+        "tailored_pdf_path",
+        "tailor_report_path",
+    }.issubset(job_columns)
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
     first_id = database.save_jd_snapshot(

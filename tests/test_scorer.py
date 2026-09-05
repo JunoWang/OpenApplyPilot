@@ -76,3 +76,25 @@ def test_failed_score_stays_null_and_success_is_checkpointed(
     assert rows[0]["scored_at"] is not None
     assert rows[1]["fit_score"] is None
     assert rows[1]["scored_at"] is None
+
+
+def test_scoring_can_target_one_exact_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _database(tmp_path)
+    resume = tmp_path / "resume.txt"
+    resume.write_text("Candidate resume", encoding="utf-8")
+    fake = FakeClient(
+        ["SCORE: 9\nKEYWORDS: agents, evaluation\nREASONING: Direct research match."]
+    )
+    monkeypatch.setattr(scorer, "RESUME_PATH", resume)
+    monkeypatch.setattr(scorer, "get_connection", lambda: conn)
+    monkeypatch.setattr(scorer, "get_client", lambda stage: fake)
+
+    result = scorer.run_scoring(job_url="https://example.test/2", limit=1)
+
+    rows = conn.execute("SELECT url, fit_score FROM jobs ORDER BY url").fetchall()
+    assert result["scored"] == 1
+    assert rows[0]["fit_score"] is None
+    assert rows[1]["fit_score"] == 9

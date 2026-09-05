@@ -19,7 +19,7 @@ from applypilot.config import DB_PATH
 # (required for SQLite thread safety with parallel workers)
 _local = threading.local()
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _utc_now() -> str:
@@ -126,6 +126,9 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
 
             -- Tailoring stage (resume tailor)
             tailored_resume_path  TEXT,
+            tailored_docx_path    TEXT,
+            tailored_pdf_path     TEXT,
+            tailor_report_path    TEXT,
             tailored_at           TEXT,
             tailor_attempts       INTEGER DEFAULT 0,
             tailor_status         TEXT DEFAULT 'waiting',
@@ -200,6 +203,9 @@ _ALL_COLUMNS: dict[str, str] = {
     "score_error": "TEXT",
     # Tailoring
     "tailored_resume_path": "TEXT",
+    "tailored_docx_path": "TEXT",
+    "tailored_pdf_path": "TEXT",
+    "tailor_report_path": "TEXT",
     "tailored_at": "TEXT",
     "tailor_attempts": "INTEGER DEFAULT 0",
     "tailor_status": "TEXT DEFAULT 'waiting'",
@@ -809,7 +815,8 @@ def store_jobs(conn: sqlite3.Connection, jobs: list[dict],
 def get_jobs_by_stage(conn: sqlite3.Connection | None = None,
                       stage: str = "discovered",
                       min_score: int | None = None,
-                      limit: int = 100) -> list[dict]:
+                      limit: int = 100,
+                      job_url: str | None = None) -> list[dict]:
     """Fetch jobs filtered by pipeline stage.
 
     Args:
@@ -817,6 +824,7 @@ def get_jobs_by_stage(conn: sqlite3.Connection | None = None,
         stage: One of "discovered", "enriched", "scored", "tailored", "applied".
         min_score: Minimum fit_score filter (only relevant for scored+ stages).
         limit: Maximum number of rows to return.
+        job_url: When provided, restrict the result to exactly this job.
 
     Returns:
         List of job dicts.
@@ -853,6 +861,10 @@ def get_jobs_by_stage(conn: sqlite3.Connection | None = None,
     if min_score is not None and "fit_score" not in where and stage in ("scored", "tailored", "applied"):
         where += " AND fit_score >= ?"
         params.append(min_score)
+
+    if job_url:
+        where += " AND url = ?"
+        params.append(job_url)
 
     query = f"SELECT * FROM jobs WHERE {where} ORDER BY fit_score DESC NULLS LAST, discovered_at DESC"
     if limit > 0:

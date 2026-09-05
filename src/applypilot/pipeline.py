@@ -119,11 +119,11 @@ def _run_enrich(workers: int = 1) -> dict:
         return {"status": f"error: {e}"}
 
 
-def _run_score() -> dict:
+def _run_score(limit: int = 0, job_url: str | None = None) -> dict:
     """Stage: LLM scoring — assign fit scores 1-10."""
     try:
         from applypilot.scoring.scorer import run_scoring
-        result = run_scoring()
+        result = run_scoring(limit=limit, job_url=job_url)
         if result.get("errors", 0):
             result["status"] = f"error: {result['errors']} scoring request(s) failed"
         else:
@@ -134,34 +134,69 @@ def _run_score() -> dict:
         return {"status": f"error: {e}"}
 
 
-def _run_tailor(min_score: int = 7, validation_mode: str = "normal") -> dict:
+def _run_tailor(
+    min_score: int = 7,
+    validation_mode: str = "normal",
+    limit: int = 20,
+    job_url: str | None = None,
+) -> dict:
     """Stage: Resume tailoring — generate tailored resumes for high-fit jobs."""
     try:
         from applypilot.scoring.tailor import run_tailoring
-        run_tailoring(min_score=min_score, validation_mode=validation_mode)
-        return {"status": "ok"}
+        result = run_tailoring(
+            min_score=min_score,
+            validation_mode=validation_mode,
+            limit=limit,
+            job_url=job_url,
+        )
+        if result.get("errors") or result.get("failed"):
+            result["status"] = (
+                f"error: {result.get('failed', 0)} validation failure(s), "
+                f"{result.get('errors', 0)} generation error(s)"
+            )
+        else:
+            result["status"] = "ok"
+        return result
     except Exception as e:
         log.error("Tailoring failed: %s", e)
         return {"status": f"error: {e}"}
 
 
-def _run_cover(min_score: int = 7, validation_mode: str = "normal") -> dict:
+def _run_cover(
+    min_score: int = 7,
+    validation_mode: str = "normal",
+    limit: int = 20,
+    job_url: str | None = None,
+) -> dict:
     """Stage: Cover letter generation."""
     try:
         from applypilot.scoring.cover_letter import run_cover_letters
-        run_cover_letters(min_score=min_score, validation_mode=validation_mode)
-        return {"status": "ok"}
+        result = run_cover_letters(
+            min_score=min_score,
+            validation_mode=validation_mode,
+            limit=limit,
+            job_url=job_url,
+        )
+        result["status"] = (
+            f"error: {result['errors']} cover letter generation failure(s)"
+            if result.get("errors") else "ok"
+        )
+        return result
     except Exception as e:
         log.error("Cover letter generation failed: %s", e)
         return {"status": f"error: {e}"}
 
 
-def _run_pdf() -> dict:
-    """Stage: PDF conversion — convert tailored resumes and cover letters to PDF."""
+def _run_pdf(limit: int = 50, job_url: str | None = None) -> dict:
+    """Stage: export approved tailored resumes to ATS-friendly DOCX and PDF."""
     try:
         from applypilot.scoring.pdf import batch_convert
-        batch_convert()
-        return {"status": "ok"}
+        result = batch_convert(limit=limit, job_url=job_url)
+        result["status"] = (
+            f"error: {result['errors']} artifact export failure(s)"
+            if result.get("errors") else "ok"
+        )
+        return result
     except Exception as e:
         log.error("PDF conversion failed: %s", e)
         return {"status": f"error: {e}"}
@@ -336,8 +371,14 @@ def _run_stage_streaming(
 # Pipeline orchestrators
 # ---------------------------------------------------------------------------
 
-def _run_sequential(ordered: list[str], min_score: int, workers: int = 1,
-                    validation_mode: str = "normal") -> dict:
+def _run_sequential(
+    ordered: list[str],
+    min_score: int,
+    workers: int = 1,
+    validation_mode: str = "normal",
+    limit: int = 20,
+    job_url: str | None = None,
+) -> dict:
     """Execute stages one at a time (original behavior)."""
     results: list[dict] = []
     errors: dict[str, str] = {}
@@ -358,6 +399,14 @@ def _run_sequential(ordered: list[str], min_score: int, workers: int = 1,
             if name in ("tailor", "cover"):
                 kwargs["min_score"] = min_score
                 kwargs["validation_mode"] = validation_mode
+                kwargs["limit"] = limit
+                kwargs["job_url"] = job_url
+            if name == "score":
+                kwargs["limit"] = limit
+                kwargs["job_url"] = job_url
+            if name == "pdf":
+                kwargs["limit"] = limit
+                kwargs["job_url"] = job_url
             if name in ("discover", "enrich"):
                 kwargs["workers"] = workers
             result = runner(**kwargs)
@@ -461,6 +510,8 @@ def run_pipeline(
     stream: bool = False,
     workers: int = 1,
     validation_mode: str = "normal",
+    limit: int = 20,
+    job_url: str | None = None,
 ) -> dict:
     """Run pipeline stages.
 
@@ -470,6 +521,8 @@ def run_pipeline(
         dry_run: If True, preview stages without executing.
         stream: If True, run stages concurrently (streaming mode).
         workers: Number of parallel threads for discovery/enrichment stages.
+        limit: Maximum jobs processed by score/tailor/cover/pdf stages.
+        job_url: Restrict supported stages to exactly one job URL.
 
     Returns:
         Dict with keys: stages (list of result dicts), errors (dict), elapsed (float).
@@ -484,6 +537,21 @@ def run_pipeline(
     if stages is None:
         stages = ["all"]
     ordered = _resolve_stages(stages)
+    if job_url and stream:
+        raise ValueError("--url cannot be combined with --stream; use the default sequential mode.")
+    unsupported_targeted = {"discover", "enrich"}.intersection(ordered)
+    if job_url and unsupported_targeted:
+        names = ", ".join(sorted(unsupported_targeted))
+        raise ValueError(f"--url is not supported for {names}; select score/tailor/cover/pdf stages.")
+    if job_url:
+        selected = get_connection().execute(
+            "SELECT url, full_description FROM jobs WHERE url = ?",
+            (job_url,),
+        ).fetchone()
+        if selected is None:
+            raise ValueError(f"Job URL was not found in the local database: {job_url}")
+        if "score" in ordered and not selected["full_description"]:
+            raise ValueError("The selected job has no saved full description and cannot be scored.")
 
     # Banner
     mode = "streaming" if stream else "sequential"
@@ -495,6 +563,8 @@ def run_pipeline(
             "workers": workers,
             "validation_mode": validation_mode,
             "dry_run": dry_run,
+            "limit": limit,
+            "job_url": job_url,
         },
         log_path=str(PIPELINE_LOG_PATH),
     )
@@ -512,6 +582,9 @@ def run_pipeline(
     console.print(f"  Min score:  {min_score}")
     console.print(f"  Workers:    {workers}")
     console.print(f"  Validation: {validation_mode}")
+    console.print(f"  Limit:      {limit}")
+    if job_url:
+        console.print(f"  Job URL:    {job_url}")
     console.print(f"  Stages:     {' -> '.join(ordered)}")
 
     # Pre-run stats
@@ -525,7 +598,7 @@ def run_pipeline(
             console.print(f"    {name:<12s}  {meta['desc']}")
         console.print("\n  No changes made.")
         for name in ordered:
-            record_stage_event(run_id, name, "dry_run")
+            record_stage_event(run_id, name, "dry_run", job_url=job_url)
         finish_pipeline_run(run_id, "completed")
         log.info("Pipeline dry-run completed id=%s", run_id)
         return {"run_id": run_id, "stages": [], "errors": {}, "elapsed": 0.0}
@@ -545,6 +618,8 @@ def run_pipeline(
                 min_score,
                 workers=workers,
                 validation_mode=validation_mode,
+                limit=limit,
+                job_url=job_url,
             )
     except KeyboardInterrupt:
         record_stage_event(run_id, "pipeline", "interrupted")
@@ -560,6 +635,7 @@ def run_pipeline(
             run_id,
             stage_result["stage"],
             stage_result["status"],
+            job_url=job_url,
             metadata={"elapsed": stage_result["elapsed"]},
         )
         log.info(

@@ -11,8 +11,8 @@ normal  -- banned words = warnings only; fabrication/structure = errors (default
 lenient -- banned words ignored; only fabrication and required structure checked
 """
 
-import re
 import logging
+import re
 
 log = logging.getLogger(__name__)
 
@@ -126,10 +126,11 @@ def validate_json_fields(data: dict, profile: dict, mode: str = "normal") -> dic
     # Skills: check for fabrication (always enforced)
     if isinstance(data["skills"], dict):
         skills_text = " ".join(str(v) for v in data["skills"].values()).lower()
+        allowed_skills = _build_skills_set(profile)
         for fake in FABRICATION_WATCHLIST:
             if len(fake) <= 2:
                 continue
-            if fake in skills_text:
+            if fake in skills_text and fake not in allowed_skills:
                 errors.append(f"Fabricated skill: '{fake}'")
 
     # Experience: preserved companies must be present (always enforced)
@@ -184,13 +185,36 @@ def validate_json_fields(data: dict, profile: dict, mode: str = "normal") -> dic
 
 # ── Full Resume Text Validation ───────────────────────────────────────────
 
-def validate_tailored_resume(text: str, profile: dict, original_text: str = "") -> dict:
+def _section_text(text: str, start_name: str, end_name: str | None = None) -> str:
+    lower = text.lower()
+    start = lower.find(start_name.lower())
+    if start == -1:
+        return ""
+    end = (
+        lower.find(end_name.lower(), start + len(start_name))
+        if end_name
+        else -1
+    )
+    return text[start + len(start_name):end if end != -1 else None]
+
+
+def _normalise_skill(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip().lower())
+
+
+def validate_tailored_resume(
+    text: str,
+    profile: dict,
+    original_text: str = "",
+    mode: str = "normal",
+) -> dict:
     """Programmatic validation of a tailored resume against the user's profile.
 
     Args:
         text: The tailored resume text to validate.
         profile: User profile dict from load_profile().
         original_text: The original base resume text (for fabrication comparison).
+        mode: Validation strictness: strict, normal, or lenient.
 
     Returns:
         {"passed": bool, "errors": list[str], "warnings": list[str]}
@@ -213,6 +237,8 @@ def validate_tailored_resume(text: str, profile: dict, original_text: str = "") 
     for section, variants in section_variants.items():
         if not any(v in text_lower for v in variants):
             errors.append(f"Missing required section: {section} (or variant)")
+    if "\npublications\n" in original_text.lower() and "\npublications\n" not in text_lower:
+        errors.append("Missing source section: PUBLICATIONS")
 
     # 2. Check name preserved (warn, don't error -- we can inject it)
     full_name = personal.get("full_name", "")
@@ -247,29 +273,65 @@ def validate_tailored_resume(text: str, profile: dict, original_text: str = "") 
     skills_end = text_lower.find("experience", skills_start) if skills_start != -1 else -1
     if skills_start != -1 and skills_end != -1:
         skills_block = text_lower[skills_start:skills_end]
+        allowed_skills = _build_skills_set(profile)
         for fake in FABRICATION_WATCHLIST:
             if len(fake) <= 2:
                 continue
-            if fake in skills_block:
+            if fake in skills_block and fake not in allowed_skills:
                 errors.append(f"FABRICATED SKILL in Technical Skills: '{fake}'")
 
-    # 8. Scan full document for fabrication watchlist items not in original
+    # 8. Reject technical skills that were not present in the original resume.
+    # Job-description keywords may be used elsewhere, but the skills inventory is
+    # a factual claim and must remain source-grounded.
     if original_text:
         original_lower = original_text.lower()
+        original_skills = _section_text(original_text, "TECHNICAL SKILLS", "EXPERIENCE")
+        if not original_skills:
+            original_skills = _section_text(original_text, "SKILLS")
+        tailored_skills = _section_text(text, "TECHNICAL SKILLS", "EXPERIENCE")
+        for line in tailored_skills.splitlines():
+            if ":" not in line:
+                continue
+            _, values = line.split(":", 1)
+            for value in re.split(r"[,;|]", values):
+                skill = _normalise_skill(value)
+                if skill and skill not in _normalise_skill(original_skills):
+                    errors.append(f"New technical skill not found in original resume: '{value.strip()}'")
+
+        # Numbers are factual claims. Tailoring may drop a number, but it cannot
+        # introduce a number that did not exist in the source resume.
+        number_pattern = r"(?<![A-Za-z])\d+(?:\.\d+)?%?"
+        original_claims = _section_text(original_text, "SUMMARY")
+        tailored_claims = _section_text(text, "SUMMARY")
+        original_numbers = set(re.findall(number_pattern, original_claims))
+        tailored_numbers = set(re.findall(number_pattern, tailored_claims))
+        added_numbers = sorted(tailored_numbers - original_numbers)
+        if added_numbers:
+            errors.append(
+                "New numeric claim(s) not found in original resume: "
+                + ", ".join(added_numbers)
+            )
+
+        # Scan full document for known fabrication markers not in original.
         for fake in FABRICATION_WATCHLIST:
             if len(fake) <= 2:
                 continue
             if fake in text_lower and fake not in original_lower:
-                warnings.append(f"New tool/skill appeared: '{fake}' (not in original)")
+                errors.append(f"New tool/skill appeared: '{fake}' (not in original)")
 
     # 9. Em dashes (should be auto-fixed by sanitize_text, but safety net)
     if "\u2014" in text or "\u2013" in text:
         errors.append("Contains em dash or en dash.")
 
-    # 10. Banned words (word-boundary matching)
-    found_banned = [w for w in BANNED_WORDS if re.search(r"\b" + re.escape(w) + r"\b", text_lower)]
-    if found_banned:
-        errors.append(f"Banned words: {', '.join(found_banned[:5])}")
+    # 10. Banned words (word-boundary matching), honoring validation mode.
+    if mode != "lenient":
+        found_banned = [w for w in BANNED_WORDS if re.search(r"\b" + re.escape(w) + r"\b", text_lower)]
+        if found_banned:
+            message = f"Banned words: {', '.join(found_banned[:5])}"
+            if mode == "strict":
+                errors.append(message)
+            else:
+                warnings.append(message)
 
     # 11. LLM self-talk leak detection
     found_leaks = [p for p in LLM_LEAK_PHRASES if p in text_lower]

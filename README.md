@@ -9,7 +9,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/applypilot?color=blue)](https://pypi.org/project/applypilot/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/Pickle-Pixel/ApplyPilot?style=social)](https://github.com/Pickle-Pixel/ApplyPilot)
+[![GitHub stars](https://img.shields.io/github/stars/JunoWang/OpenApplyPilot?style=social)](https://github.com/JunoWang/OpenApplyPilot)
 
 
 
@@ -201,6 +201,8 @@ applypilot run --min-score 8            # Override score threshold
 applypilot run --dry-run                # Preview without executing
 applypilot run --validation lenient     # Relax validation (recommended for Gemini free tier)
 applypilot run --validation strict      # Strictest validation (retries on any banned word)
+applypilot run score tailor pdf \
+  --url JOB_URL --limit 1               # Safely test one stored job end to end
 applypilot apply                        # Launch auto-apply
 applypilot apply --workers 3            # Parallel browser workers
 applypilot apply --dry-run              # Fill forms without submitting
@@ -210,6 +212,12 @@ applypilot apply --url URL              # Apply to a specific job
 applypilot status                       # Pipeline statistics
 applypilot dashboard                    # Open HTML results dashboard
 ```
+
+The targeted Stage 3 command only scores, tailors, validates, and exports the
+selected job. It does **not** submit an application. Approved outputs are saved
+with owner-only permissions under `~/.openapplypilot/tailored_resumes/` as TXT,
+DOCX, PDF, a JD snapshot, a unified diff, and a JSON validation report. See the
+[single-job Stage 3 acceptance record](docs/stage-3-single-job-validation.md).
 
 ---
 

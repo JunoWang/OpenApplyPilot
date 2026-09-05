@@ -5,7 +5,7 @@ description = "AI-powered end-to-end job application pipeline"
 readme = "README.md"
 license = "AGPL-3.0-only"
 requires-python = ">=3.11"
-authors = [{name = "Pickle-Pixel"}]
+authors = [{name = "Pickle-Pixel"}, {name = "JunoWang"}]
 keywords = ["job-search", "automation", "ai", "resume", "apply", "job-application"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -26,6 +26,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
     "pandas>=2.0",
+    "python-docx>=1.1",
     ]
 
 [project.optional-dependencies]
@@ -35,9 +36,9 @@ dev = ["pytest>=7.0", "ruff>=0.1"]
 applypilot = "applypilot.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/Pickle-Pixel/ApplyPilot"
-Repository = "https://github.com/Pickle-Pixel/ApplyPilot"
-Issues = "https://github.com/Pickle-Pixel/ApplyPilot/issues"
+Homepage = "https://github.com/JunoWang/OpenApplyPilot"
+Repository = "https://github.com/JunoWang/OpenApplyPilot"
+Issues = "https://github.com/JunoWang/OpenApplyPilot/issues"
 
 [build-system]
 requires = ["hatchling"]
