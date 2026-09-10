@@ -528,6 +528,73 @@ def test_resume_of_completed_dry_run_starts_fresh_approved_attempt(tmp_path, mon
     assert stored["status"] == "submitted"
 
 
+def test_resume_after_prepare_process_interruption_starts_fresh_attempt(tmp_path, monkeypatch) -> None:
+    conn = database.init_db(tmp_path / "jobs.db")
+    job = _insert_ready_job(conn, tmp_path)
+    application_id = database.create_application_record(job["url"], conn=conn)
+    review_dir = tmp_path / "reviews"
+    review_dir.mkdir()
+    monkeypatch.setattr(launcher.config, "APPLICATION_REVIEW_DIR", review_dir)
+    monkeypatch.setattr(launcher.config, "APPLY_CHECKPOINT_DB_PATH", tmp_path / "checkpoints.db")
+    monkeypatch.setattr(
+        launcher,
+        "update_application_record",
+        partial(database.update_application_record, conn=conn),
+    )
+    monkeypatch.setattr(
+        launcher,
+        "get_application_record",
+        partial(database.get_application_record, conn=conn),
+    )
+    phases: list[str] = []
+    should_interrupt = True
+
+    def fake_run_job(*_args, application_id=None, phase="prepare", **_kwargs):
+        nonlocal should_interrupt
+        phases.append(phase)
+        if should_interrupt:
+            should_interrupt = False
+            raise RuntimeError("simulated interruption during browser preparation")
+        (review_dir / f"{application_id}.png").write_bytes(b"review")
+        return "ready_for_review", 10
+
+    monkeypatch.setattr(launcher, "run_job", fake_run_job)
+
+    try:
+        launcher.run_safe_workflow(
+            job,
+            port=9222,
+            worker_id=0,
+            model="haiku",
+            application_id=application_id,
+            allow_submission=False,
+            approval_callback=lambda _payload: True,
+        )
+    except RuntimeError as exc:
+        assert "simulated interruption" in str(exc)
+    else:  # pragma: no cover - protects the test setup
+        raise AssertionError("workflow preparation was not interrupted")
+
+    decisions: list[str] = []
+    result, duration = launcher.run_safe_workflow(
+        job,
+        port=9222,
+        worker_id=0,
+        model="haiku",
+        application_id=application_id,
+        allow_submission=False,
+        approval_callback=lambda payload: decisions.append(payload["kind"]) or True,
+        resume=True,
+    )
+
+    stored = database.get_application_record(application_id, conn=conn)
+    assert (result, duration) == ("ready_for_review", 10)
+    assert phases == ["prepare", "prepare"]
+    assert decisions == ["material_approval"]
+    assert stored["workflow_thread_id"].startswith(f"{application_id}:resume:")
+    assert stored["status"] == "ready_for_review"
+
+
 def test_resume_dry_run_rejects_pending_final_without_submit(tmp_path, monkeypatch) -> None:
     conn = database.init_db(tmp_path / "jobs.db")
     job = _insert_ready_job(conn, tmp_path)

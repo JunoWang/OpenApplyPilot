@@ -858,6 +858,20 @@ def run_safe_workflow(
             submit_form=submit_form,
             browser_session_id=browser_session_id,
         )
+
+        def start_fresh_browser_attempt():
+            """Start a new checkpoint thread when no live browser can be resumed."""
+            nonlocal graph_config, thread_id
+            thread_id = f"{application_id}:resume:{uuid.uuid4()}"
+            graph_config = {"configurable": {"thread_id": thread_id}}
+            update_application_record(
+                application_id,
+                None,
+                workflow_thread_id=thread_id,
+            )
+            restarted_state = graph.invoke(initial_state, config=graph_config)
+            return restarted_state, interrupt_payload(restarted_state)
+
         if resume:
             snapshot = graph.get_state(graph_config)
             if not snapshot.values:
@@ -865,24 +879,24 @@ def run_safe_workflow(
             state = dict(snapshot.values)
             payload = snapshot_interrupt_payload(snapshot)
             if not payload:
-                if state.get("status") != "ready_for_review":
+                status = state.get("status")
+                safe_to_restart = status in {
+                    "draft",
+                    "materials_approved",
+                    "failed",
+                    "browser_session_expired",
+                    "ready_for_review",
+                } and not state.get("final_approved")
+                if not safe_to_restart:
                     raise RuntimeError(
-                        "The saved workflow is not ready to resume; start a new application review instead."
+                        "The saved workflow may have reached submission; refusing automatic recovery."
                     )
 
-                # A completed dry run or rejected final action has no pending
-                # interrupt to continue. Start a new durable attempt under the
-                # same application record. This intentionally requires fresh
-                # material and final approvals and a newly prepared browser.
-                thread_id = f"{application_id}:resume:{uuid.uuid4()}"
-                graph_config = {"configurable": {"thread_id": thread_id}}
-                update_application_record(
-                    application_id,
-                    None,
-                    workflow_thread_id=thread_id,
-                )
-                state = graph.invoke(initial_state, config=graph_config)
-                payload = interrupt_payload(state)
+                # Completed dry runs and browser preparation interrupted after
+                # material approval have no resumable browser state. Start a
+                # new durable attempt under the same application record. This
+                # requires a fresh browser preparation and approval gates.
+                state, payload = start_fresh_browser_attempt()
         else:
             state = graph.invoke(initial_state, config=graph_config)
             payload = interrupt_payload(state)
