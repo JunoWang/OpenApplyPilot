@@ -56,6 +56,11 @@ logger = logging.getLogger(__name__)
 ApprovalCallback = Callable[[Mapping[str, object]], bool]
 
 
+def _job_company(job: Mapping[str, object]) -> str:
+    """Return employer name, falling back to the discovery source."""
+    return str(job.get("company") or job.get("site") or "")
+
+
 # Blocked sites loaded from config/sites.yaml
 def _load_blocked():
     from applypilot.config import load_blocked_sites
@@ -156,7 +161,7 @@ def acquire_job(target_url: str | None = None, min_score: int = 7, worker_id: in
             like = f"%{target_url.split('?')[0].rstrip('/')}%"
             row = conn.execute(
                 """
-                SELECT url, title, site, application_url, tailored_resume_path,
+                SELECT url, title, company, site, application_url, tailored_resume_path,
                        tailored_docx_path, tailored_pdf_path, tailor_report_path,
                        fit_score, location, full_description, cover_letter_path
                 FROM jobs
@@ -182,7 +187,7 @@ def acquire_job(target_url: str | None = None, min_score: int = 7, worker_id: in
                 params.extend(blocked_patterns)
             row = conn.execute(
                 f"""
-                SELECT url, title, site, application_url, tailored_resume_path,
+                SELECT url, title, company, site, application_url, tailored_resume_path,
                        tailored_docx_path, tailored_pdf_path, tailor_report_path,
                        fit_score, location, full_description, cover_letter_path
                 FROM jobs
@@ -240,7 +245,7 @@ def reacquire_application(application_id: str, worker_id: int = 0) -> dict:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             """
-            SELECT j.url, j.title, j.site, j.application_url,
+            SELECT j.url, j.title, j.company, j.site, j.application_url,
                    j.tailored_resume_path, j.tailored_docx_path,
                    j.tailored_pdf_path, j.tailor_report_path, j.fit_score,
                    j.location, j.full_description, j.cover_letter_path,
@@ -508,19 +513,19 @@ def run_job(
         worker_id,
         status="applying",
         job_title=job["title"],
-        company=job.get("site", ""),
+        company=_job_company(job),
         score=job.get("fit_score", 0),
         start_time=time.time(),
         actions=0,
         last_action="starting",
     )
-    add_event(f"[W{worker_id}] Starting: {job['title'][:40]} @ {job.get('site', '')}")
+    add_event(f"[W{worker_id}] Starting: {job['title'][:40]} @ {_job_company(job)}")
 
     worker_log = config.LOG_DIR / f"worker-{worker_id}.log"
     ts_header = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_header = (
         f"\n{'=' * 60}\n"
-        f"[{ts_header}] {job['title']} @ {job.get('site', '')}\n"
+        f"[{ts_header}] {job['title']} @ {_job_company(job)}\n"
         f"URL: {job.get('application_url') or job['url']}\n"
         f"Score: {job.get('fit_score', 'N/A')}/10\n"
         f"{'=' * 60}\n"
@@ -833,7 +838,7 @@ def run_safe_workflow(
         "application_id": application_id,
         "job_url": job["url"],
         "job_title": job.get("title", ""),
-        "company": job.get("site", ""),
+        "company": _job_company(job),
         "resume_path": (job.get("tailored_pdf_path") or job.get("tailored_resume_path", "")),
         "cover_letter_path": job.get("cover_letter_path", "") or "",
         "tailor_report_path": job.get("tailor_report_path", "") or "",

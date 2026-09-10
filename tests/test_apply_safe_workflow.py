@@ -19,9 +19,9 @@ def _insert_ready_job(conn, tmp_path: Path, *, url: str = "https://example.test/
     conn.execute(
         """
         INSERT INTO jobs (
-            url, title, site, application_url, full_description, fit_score,
+            url, title, company, site, application_url, full_description, fit_score,
             tailored_resume_path, tailored_pdf_path, apply_status, discovered_at
-        ) VALUES (?, 'Engineer', 'Example Co', ?, 'Build systems', 8, ?, ?, NULL, ?)
+        ) VALUES (?, 'Engineer', 'Example Co', 'LinkedIn', ?, 'Build systems', 8, ?, ?, NULL, ?)
         """,
         (url, url, str(resume_txt), str(resume_pdf), "2026-09-07T00:00:00Z"),
     )
@@ -29,7 +29,8 @@ def _insert_ready_job(conn, tmp_path: Path, *, url: str = "https://example.test/
     return {
         "url": url,
         "title": "Engineer",
-        "site": "Example Co",
+        "company": "Example Co",
+        "site": "LinkedIn",
         "application_url": url,
         "fit_score": 8,
         "tailored_resume_path": str(resume_txt),
@@ -51,6 +52,7 @@ def _profile() -> dict:
             "legally_authorized_to_work": "Yes",
             "require_sponsorship": "No",
         },
+        "mobility": {"willing_to_relocate": True},
         "compensation": {
             "salary_expectation": "100000",
             "salary_range_min": "100000",
@@ -95,8 +97,23 @@ def test_dry_run_prompt_stops_at_review_and_uses_distinct_result(tmp_path, monke
 
     assert "RESULT:READY_FOR_REVIEW" in value
     assert "Never click Submit, Apply, Send" in value
+    assert "Company: Example Co" in value
     assert str(review_path.resolve()) in value
     assert "Do NOT send an email" in value
+    assert "Willing to Relocate: Yes" in value
+    assert "willing to relocate: Yes" in value
+    assert "Do not reject solely because the city differs" in value
+
+
+def test_location_prompt_defaults_to_no_relocation_for_legacy_profiles() -> None:
+    profile = _profile()
+    profile.pop("mobility")
+
+    value = prompt._build_location_check(profile, {})
+    screening = prompt._build_screening_section(profile)
+
+    assert '"Hybrid" or "onsite" in Toronto -> ELIGIBLE' in value
+    assert "willing to relocate: No" in screening
 
 
 def test_safe_graph_dry_run_requires_material_approval_and_never_submits() -> None:

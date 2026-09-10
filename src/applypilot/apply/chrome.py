@@ -4,6 +4,7 @@ Handles launching an isolated Chrome instance with remote debugging,
 worker profile setup/cloning, and cross-platform process cleanup.
 """
 
+import hashlib
 import json
 import logging
 import platform
@@ -45,6 +46,7 @@ def _kill_process_tree(pid: int) -> None:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=10,
+                check=False,
             )
         else:
             # Unix: kill entire process group
@@ -70,7 +72,7 @@ def _kill_on_port(port: int) -> None:
         if platform.system() == "Windows":
             result = subprocess.run(
                 ["netstat", "-ano", "-p", "TCP"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=10, check=False,
             )
             for line in result.stdout.splitlines():
                 if f":{port}" in line and "LISTENING" in line:
@@ -81,7 +83,7 @@ def _kill_on_port(port: int) -> None:
             # macOS / Linux
             result = subprocess.run(
                 ["lsof", "-ti", f":{port}"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=10, check=False,
             )
             for pid_str in result.stdout.strip().splitlines():
                 pid_str = pid_str.strip()
@@ -97,40 +99,100 @@ def _kill_on_port(port: int) -> None:
 # Worker profile management
 # ---------------------------------------------------------------------------
 
-def setup_worker_profile(worker_id: int) -> Path:
+def find_chrome_profile_by_email(user_data_dir: Path, email: str) -> str | None:
+    """Return the Chrome profile directory associated with ``email``.
+
+    Chrome keeps this mapping in the root ``Local State`` file.  Only profile
+    metadata is read here; cookies, passwords, and browsing data are never
+    inspected.
+    """
+    if not email.strip():
+        return None
+
+    local_state_path = user_data_dir / "Local State"
+    try:
+        local_state = json.loads(local_state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    target = email.strip().casefold()
+    info_cache = local_state.get("profile", {}).get("info_cache", {})
+    for directory, metadata in info_cache.items():
+        if not isinstance(metadata, dict):
+            continue
+        account_email = str(metadata.get("user_name", "")).strip().casefold()
+        if account_email == target and (user_data_dir / directory).is_dir():
+            return directory
+    return None
+
+
+def _select_source_profile(user_data_dir: Path) -> tuple[str, str]:
+    """Resolve the configured Chrome profile directory and account email."""
+    profile = config.load_profile()
+    browser = profile.get("browser", {})
+    personal = profile.get("personal", {})
+    requested_directory = str(browser.get("chrome_profile_directory", "")).strip()
+    requested_email = str(
+        browser.get("chrome_account_email") or personal.get("email") or ""
+    ).strip()
+
+    if requested_directory:
+        if Path(requested_directory).name != requested_directory:
+            raise ValueError("browser.chrome_profile_directory must be a Chrome profile directory name")
+        if not (user_data_dir / requested_directory).is_dir():
+            raise FileNotFoundError(
+                f"Configured Chrome profile directory not found: {requested_directory}"
+            )
+        return requested_directory, requested_email
+
+    if requested_email:
+        matched = find_chrome_profile_by_email(user_data_dir, requested_email)
+        if matched:
+            return matched, requested_email
+        if browser.get("chrome_account_email"):
+            raise RuntimeError(
+                "No local Chrome profile matches browser.chrome_account_email. "
+                "Open Chrome with that account once or update profile.json."
+            )
+
+    if (user_data_dir / "Default").is_dir():
+        return "Default", requested_email
+    raise FileNotFoundError(f"No usable Chrome profile found under {user_data_dir}")
+
+
+def setup_worker_profile(worker_id: int) -> tuple[Path, str]:
     """Create an isolated Chrome profile for a worker.
 
-    On first run, clones from an existing worker profile (preferred, since
-    it already has session cookies) or from the user's real Chrome profile.
-    Subsequent runs reuse the existing worker profile.
+    On first run, clones only the configured account's profile from the user's
+    real Chrome data. Subsequent runs reuse that account-specific worker copy.
 
     Args:
         worker_id: Numeric worker identifier.
 
     Returns:
-        Path to the worker's Chrome user-data directory.
+        Tuple of worker user-data directory and Chrome profile directory name.
     """
-    profile_dir = config.CHROME_WORKER_DIR / f"worker-{worker_id}"
-    if (profile_dir / "Default").exists():
-        return profile_dir  # Already initialized
+    source = config.get_chrome_user_data()
+    source_profile, account_email = _select_source_profile(source)
+    identity = hashlib.sha256(
+        f"{source.resolve()}\0{source_profile}\0{account_email.casefold()}".encode()
+    ).hexdigest()[:10]
+    profile_dir = config.CHROME_WORKER_DIR / f"worker-{worker_id}-{identity}"
+    marker_path = profile_dir / ".openapplypilot-profile.json"
+    if marker_path.exists() and (profile_dir / source_profile).is_dir():
+        return profile_dir, source_profile
 
-    # Find a source: prefer existing worker (has session cookies), else user profile
-    source: Path | None = None
-    for wid in range(10):
-        if wid == worker_id:
-            continue
-        candidate = config.CHROME_WORKER_DIR / f"worker-{wid}"
-        if (candidate / "Default").exists():
-            source = candidate
-            break
-    if source is None:
-        source = config.get_chrome_user_data()
-
-    logger.info("[worker-%d] Copying Chrome profile from %s (first time setup)...",
-                worker_id, source.name)
+    logger.info(
+        "[worker-%d] Copying selected Chrome profile %s (first time setup)...",
+        worker_id,
+        source_profile,
+    )
     profile_dir.mkdir(parents=True, exist_ok=True)
+    profile_dir.chmod(0o700)
 
-    # Copy essential profile dirs -- skip caches and heavy transient data
+    # Copy only the browser state needed to preserve the selected account and
+    # website sessions. Login Data and every other password-store file are
+    # deliberately excluded.
     skip = {
         "ShaderCache", "GrShaderCache", "Service Worker", "Cache",
         "Code Cache", "GPUCache", "CacheStorage", "Crashpad",
@@ -139,7 +201,10 @@ def setup_worker_profile(worker_id: int) -> Path:
         "SingletonLock", "SingletonSocket", "SingletonCookie",
     }
 
-    for item in source.iterdir():
+    root_items = [source / "Local State"]
+    for item in root_items:
+        if not item.exists():
+            continue
         if item.name in skip:
             continue
         dst = profile_dir / item.name
@@ -156,16 +221,56 @@ def setup_worker_profile(worker_id: int) -> Path:
         except (PermissionError, OSError):
             pass  # skip locked files
 
-    return profile_dir
+    source_profile_dir = source / source_profile
+    destination_profile_dir = profile_dir / source_profile
+    destination_profile_dir.mkdir(parents=True, exist_ok=True)
+    session_items = (
+        "Preferences",
+        "Secure Preferences",
+        "Cookies",
+        "Cookies-journal",
+        "Network",
+        "Local Storage",
+        "Session Storage",
+        "WebStorage",
+    )
+    for name in session_items:
+        item = source_profile_dir / name
+        if not item.exists():
+            continue
+        dst = destination_profile_dir / name
+        try:
+            if item.is_dir():
+                shutil.copytree(
+                    str(item),
+                    str(dst),
+                    dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("Cache", "Code Cache", "GPUCache"),
+                )
+            else:
+                shutil.copy2(str(item), str(dst))
+        except (PermissionError, OSError):
+            pass  # skip files Chrome currently has locked
+
+    if not (destination_profile_dir / "Preferences").is_file() or not (
+        profile_dir / "Local State"
+    ).is_file():
+        raise RuntimeError(f"Could not copy selected Chrome profile: {source_profile}")
+    marker_path.write_text(
+        json.dumps({"source_profile": source_profile}, indent=2),
+        encoding="utf-8",
+    )
+    marker_path.chmod(0o600)
+    return profile_dir, source_profile
 
 
-def _suppress_restore_nag(profile_dir: Path) -> None:
+def _suppress_restore_nag(profile_dir: Path, profile_name: str = "Default") -> None:
     """Clear Chrome's 'restore pages' nag by fixing Preferences.
 
     Chrome writes exit_type=Crashed when killed, which triggers a
     'Restore pages?' prompt on next launch. This patches it out.
     """
-    prefs_file = profile_dir / "Default" / "Preferences"
+    prefs_file = profile_dir / profile_name / "Preferences"
     if not prefs_file.exists():
         return
 
@@ -201,13 +306,13 @@ def launch_chrome(worker_id: int, port: int | None = None,
     if port is None:
         port = BASE_CDP_PORT + worker_id
 
-    profile_dir = setup_worker_profile(worker_id)
+    profile_dir, profile_name = setup_worker_profile(worker_id)
 
     # Kill any zombie Chrome from a previous run on this port
     _kill_on_port(port)
 
     # Patch preferences to suppress restore nag
-    _suppress_restore_nag(profile_dir)
+    _suppress_restore_nag(profile_dir, profile_name)
 
     chrome_exe = config.get_chrome_path()
 
@@ -215,7 +320,7 @@ def launch_chrome(worker_id: int, port: int | None = None,
         chrome_exe,
         f"--remote-debugging-port={port}",
         f"--user-data-dir={profile_dir}",
-        "--profile-directory=Default",
+        f"--profile-directory={profile_name}",
         "--no-first-run",
         "--no-default-browser-check",
         "--window-size=1024,768",
@@ -236,7 +341,7 @@ def launch_chrome(worker_id: int, port: int | None = None,
         cmd.append("--headless=new")
 
     # On Unix, start in a new process group so we can kill the whole tree
-    kwargs: dict = dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     if platform.system() != "Windows":
         import os
         kwargs["preexec_fn"] = os.setsid

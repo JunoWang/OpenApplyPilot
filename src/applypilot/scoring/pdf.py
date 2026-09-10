@@ -18,6 +18,7 @@ log = logging.getLogger(__name__)
 
 # ── Resume Parser ────────────────────────────────────────────────────────
 
+
 def parse_resume(text: str) -> dict:
     """Parse a structured text resume into sections.
 
@@ -130,9 +131,7 @@ def parse_entries(text: str) -> list[dict]:
             if current:
                 current["bullets"].append(stripped[2:].strip())
         elif current is None or (
-            not stripped.startswith("-")
-            and not stripped.startswith("\u2022")
-            and len(current.get("bullets", [])) > 0
+            not stripped.startswith("-") and not stripped.startswith("\u2022") and len(current.get("bullets", [])) > 0
         ):
             # New entry
             if current:
@@ -152,6 +151,7 @@ def parse_entries(text: str) -> list[dict]:
 
 # ── HTML Template ────────────────────────────────────────────────────────
 
+
 def build_html(resume: dict) -> str:
     """Build professional resume HTML from parsed data.
 
@@ -169,10 +169,7 @@ def build_html(resume: dict) -> str:
         skills = parse_skills(sections["TECHNICAL SKILLS"])
         rows = ""
         for cat, val in skills:
-            rows += (
-                '<div class="skill-row"><span class="skill-cat">'
-                f"{escape(cat)}:</span> {escape(val)}</div>\n"
-            )
+            rows += f'<div class="skill-row"><span class="skill-cat">{escape(cat)}:</span> {escape(val)}</div>\n'
         skills_html = f'<div class="section"><div class="section-title">Technical Skills</div>{rows}</div>'
 
     # Experience
@@ -182,13 +179,10 @@ def build_html(resume: dict) -> str:
         items = ""
         for e in entries:
             bullets = "".join(f"<li>{escape(b)}</li>" for b in e["bullets"])
-            subtitle = (
-                f'<div class="entry-subtitle">{escape(e["subtitle"])}</div>'
-                if e["subtitle"] else ""
-            )
+            subtitle = f'<div class="entry-subtitle">{escape(e["subtitle"])}</div>' if e["subtitle"] else ""
             items += (
                 '<div class="entry"><div class="entry-title">'
-                f'{escape(e["title"])}</div>{subtitle}<ul>{bullets}</ul></div>'
+                f"{escape(e['title'])}</div>{subtitle}<ul>{bullets}</ul></div>"
             )
         exp_html = f'<div class="section"><div class="section-title">Experience</div>{items}</div>'
 
@@ -199,13 +193,10 @@ def build_html(resume: dict) -> str:
         items = ""
         for e in entries:
             bullets = "".join(f"<li>{escape(b)}</li>" for b in e["bullets"])
-            subtitle = (
-                f'<div class="entry-subtitle">{escape(e["subtitle"])}</div>'
-                if e["subtitle"] else ""
-            )
+            subtitle = f'<div class="entry-subtitle">{escape(e["subtitle"])}</div>' if e["subtitle"] else ""
             items += (
                 '<div class="entry"><div class="entry-title">'
-                f'{escape(e["title"])}</div>{subtitle}<ul>{bullets}</ul></div>'
+                f"{escape(e['title'])}</div>{subtitle}<ul>{bullets}</ul></div>"
             )
         proj_html = f'<div class="section"><div class="section-title">Projects</div>{items}</div>'
 
@@ -217,10 +208,7 @@ def build_html(resume: dict) -> str:
             for line in sections["EDUCATION"].splitlines()
             if line.strip()
         )
-        edu_html = (
-            '<div class="section"><div class="section-title">Education</div>'
-            f"{education}</div>"
-        )
+        edu_html = f'<div class="section"><div class="section-title">Education</div>{education}</div>'
 
     # Publications
     pub_html = ""
@@ -230,10 +218,7 @@ def build_html(resume: dict) -> str:
             for line in sections["PUBLICATIONS"].splitlines()
             if line.strip()
         )
-        pub_html = (
-            '<div class="section"><div class="section-title">Publications</div>'
-            f"{publications}</div>"
-        )
+        pub_html = f'<div class="section"><div class="section-title">Publications</div>{publications}</div>'
 
     # Summary
     summary_html = ""
@@ -249,10 +234,7 @@ def build_html(resume: dict) -> str:
     contact_html = " &nbsp;|&nbsp; ".join(escape(part) for part in contact_parts)
 
     # Location line (may be empty)
-    location_html = (
-        f'<div class="location">{escape(resume["location"])}</div>'
-        if resume["location"] else ""
-    )
+    location_html = f'<div class="location">{escape(resume["location"])}</div>' if resume["location"] else ""
 
     return f"""<!DOCTYPE html>
 <html>
@@ -261,7 +243,7 @@ def build_html(resume: dict) -> str:
 <style>
 @page {{
     size: letter;
-    margin: 0.25in 0.5in;
+    margin: 0.20in 0.45in;
 }}
 * {{
     margin: 0;
@@ -270,8 +252,8 @@ def build_html(resume: dict) -> str:
 }}
 body {{
     font-family: 'Calibri', 'Segoe UI', Arial, sans-serif;
-    font-size: 10pt;
-    line-height: 1.3;
+    font-size: 9.5pt;
+    line-height: 1.22;
     color: #1a1a1a;
 }}
 .header {{
@@ -281,13 +263,13 @@ body {{
     border-bottom: 1.5px solid #2a7ab5;
 }}
 .name {{
-    font-size: 18pt;
+    font-size: 17pt;
     font-weight: 700;
     color: #1a3a5c;
     letter-spacing: 0.5px;
 }}
 .title {{
-    font-size: 10.5pt;
+    font-size: 10pt;
     color: #3a6b8c;
     margin: 1px 0;
 }}
@@ -318,14 +300,14 @@ body {{
     margin-bottom: 3px;
 }}
 .summary {{
-    font-size: 9.5pt;
+    font-size: 9.15pt;
     color: #333;
-    line-height: 1.3;
+    line-height: 1.22;
 }}
 .skill-row {{
-    font-size: 9.5pt;
+    font-size: 9.15pt;
     margin: 0;
-    line-height: 1.28;
+    line-height: 1.2;
 }}
 .skill-cat {{
     font-weight: 600;
@@ -351,24 +333,24 @@ ul {{
     padding: 0;
 }}
 li {{
-    font-size: 9.5pt;
+    font-size: 9pt;
     margin-bottom: 0;
-    line-height: 1.28;
+    line-height: 1.2;
 }}
 .education {{
-    font-size: 9.25pt;
-    line-height: 1.25;
+    font-size: 9pt;
+    line-height: 1.18;
 }}
 .publication {{
-    font-size: 9.25pt;
-    line-height: 1.25;
+    font-size: 9pt;
+    line-height: 1.18;
 }}
 </style>
 </head>
 <body>
 <div class="header">
-    <div class="name">{escape(resume['name'])}</div>
-    <div class="title">{escape(resume['title'])}</div>
+    <div class="name">{escape(resume["name"])}</div>
+    <div class="title">{escape(resume["title"])}</div>
     {location_html}
     <div class="contact">{contact_html}</div>
 </div>
@@ -382,7 +364,35 @@ li {{
 </html>"""
 
 
+def build_cover_letter_html(text: str) -> str:
+    """Render plain cover-letter text as a conventional left-aligned letter."""
+    paragraphs = [part.strip() for part in text.strip().split("\n\n") if part.strip()]
+    body = "\n".join(f"<p>{escape(part).replace(chr(10), '<br>')}</p>" for part in paragraphs)
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+@page {{ size: letter; margin: 0.75in 0.85in; }}
+* {{ box-sizing: border-box; }}
+body {{
+    margin: 0;
+    color: #1f2937;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 11pt;
+    line-height: 1.48;
+}}
+p {{ margin: 0 0 14pt; text-align: left; }}
+p:first-child {{ margin-bottom: 18pt; }}
+p:last-child {{ margin-top: 18pt; margin-bottom: 0; }}
+</style>
+</head>
+<body>{body}</body>
+</html>"""
+
+
 # ── ATS-friendly DOCX Renderer ──────────────────────────────────────────
+
 
 def _set_run_font(run, *, size: float, bold: bool = False, color: str = "1A1A1A") -> None:
     """Apply explicit Arial typography across Word and LibreOffice."""
@@ -550,6 +560,7 @@ def build_docx(resume: dict, output_path: Path) -> Path:
 
 # ── PDF Renderer ─────────────────────────────────────────────────────────
 
+
 def render_pdf(html: str, output_path: str) -> None:
     """Render HTML to PDF using Playwright's headless Chromium.
 
@@ -574,9 +585,8 @@ def render_pdf(html: str, output_path: str) -> None:
 
 # ── Public API ───────────────────────────────────────────────────────────
 
-def convert_to_pdf(
-    text_path: Path, output_path: Path | None = None, html_only: bool = False
-) -> Path:
+
+def convert_to_pdf(text_path: Path, output_path: Path | None = None, html_only: bool = False) -> Path:
     """Convert a text resume/cover letter to PDF.
 
     Args:
@@ -590,8 +600,11 @@ def convert_to_pdf(
     """
     text_path = Path(text_path)
     text = text_path.read_text(encoding="utf-8")
-    resume = parse_resume(text)
-    html = build_html(resume)
+    if text.lstrip().lower().startswith("dear "):
+        html = build_cover_letter_html(text)
+    else:
+        resume = parse_resume(text)
+        html = build_html(resume)
 
     if html_only:
         out = output_path or text_path.with_suffix(".html")
@@ -633,9 +646,7 @@ def _record_export_artifacts(
 
     try:
         report = json.loads(path.read_text(encoding="utf-8"))
-        report.setdefault("artifacts", {}).update(
-            {"docx": str(docx_path), "pdf": str(pdf_path)}
-        )
+        report.setdefault("artifacts", {}).update({"docx": str(docx_path), "pdf": str(pdf_path)})
         path.write_text(json.dumps(report, indent=2), encoding="utf-8")
         path.chmod(0o600)
     except (OSError, json.JSONDecodeError, TypeError) as exc:
@@ -702,9 +713,7 @@ def batch_convert(
             )
             conn.commit()
             converted += 1
-            results.append(
-                {"url": job["url"], "docx_path": str(docx_path), "pdf_path": str(pdf_path)}
-            )
+            results.append({"url": job["url"], "docx_path": str(docx_path), "pdf_path": str(pdf_path)})
         except Exception as exc:
             errors += 1
             results.append({"url": job["url"], "error": str(exc)})

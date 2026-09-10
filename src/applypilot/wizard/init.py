@@ -13,7 +13,6 @@ import json
 import shutil
 from pathlib import Path
 
-import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
@@ -34,6 +33,7 @@ console = Console()
 # ---------------------------------------------------------------------------
 # Resume
 # ---------------------------------------------------------------------------
+
 
 def _setup_resume() -> None:
     """Prompt for resume file and copy into APP_DIR."""
@@ -78,9 +78,14 @@ def _setup_resume() -> None:
 # Profile
 # ---------------------------------------------------------------------------
 
+
 def _setup_profile() -> dict:
     """Walk through profile questions and return a nested profile dict."""
-    console.print(Panel("[bold]Step 2: Profile[/bold]\nTell ApplyPilot about yourself. This powers scoring, tailoring, and auto-fill."))
+    console.print(
+        Panel(
+            "[bold]Step 2: Profile[/bold]\nTell ApplyPilot about yourself. This powers scoring, tailoring, and auto-fill."
+        )
+    )
 
     profile: dict = {}
 
@@ -104,12 +109,29 @@ def _setup_profile() -> dict:
         "password": Prompt.ask("Job site password (used for login walls during auto-apply)", password=True, default=""),
     }
 
+    # -- Browser session --
+    console.print("\n[bold cyan]Browser Session[/bold cyan]")
+    profile["browser"] = {
+        "chrome_account_email": Prompt.ask(
+            "Chrome account email for auto-apply",
+            default=profile["personal"]["email"],
+        ),
+    }
+
     # -- Work Authorization --
     console.print("\n[bold cyan]Work Authorization[/bold cyan]")
     profile["work_authorization"] = {
         "legally_authorized_to_work": Confirm.ask("Are you legally authorized to work in your target country?"),
         "require_sponsorship": Confirm.ask("Will you now or in the future need sponsorship?"),
-        "work_permit_type": Prompt.ask("Work permit type (e.g. Citizen, PR, Open Work Permit — leave blank if N/A)", default=""),
+        "work_permit_type": Prompt.ask(
+            "Work permit type (e.g. Citizen, PR, Open Work Permit — leave blank if N/A)", default=""
+        ),
+    }
+
+    # -- Mobility --
+    console.print("\n[bold cyan]Mobility[/bold cyan]")
+    profile["mobility"] = {
+        "willing_to_relocate": Confirm.ask("Are you willing to relocate for a suitable role?", default=False),
     }
 
     # -- Compensation --
@@ -128,7 +150,9 @@ def _setup_profile() -> dict:
     # -- Experience --
     console.print("\n[bold cyan]Experience[/bold cyan]")
     current_title = Prompt.ask("Current/most recent job title", default="")
-    target_role = Prompt.ask("Target role (what you're applying for, e.g. 'Senior Backend Engineer')", default=current_title)
+    target_role = Prompt.ask(
+        "Target role (what you're applying for, e.g. 'Senior Backend Engineer')", default=current_title
+    )
     profile["experience"] = {
         "years_of_experience_total": Prompt.ask("Years of professional experience", default=""),
         "education_level": Prompt.ask("Highest education (e.g. Bachelor's, Master's, PhD, Self-taught)", default=""),
@@ -184,6 +208,7 @@ def _setup_profile() -> dict:
 # Search config
 # ---------------------------------------------------------------------------
 
+
 def _setup_searches() -> None:
     """Generate a searches.yaml from user input."""
     console.print(Panel("[bold]Step 3: Job Search Config[/bold]\nDefine what you're looking for."))
@@ -195,9 +220,7 @@ def _setup_searches() -> None:
     except ValueError:
         distance = 0
 
-    roles_raw = Prompt.ask(
-        "Target job titles (comma-separated, e.g. 'Backend Engineer, Full Stack Developer')"
-    )
+    roles_raw = Prompt.ask("Target job titles (comma-separated, e.g. 'Backend Engineer, Full Stack Developer')")
     roles = [r.strip() for r in roles_raw.split(",") if r.strip()]
 
     if not roles:
@@ -233,21 +256,22 @@ def _setup_searches() -> None:
 # AI Features
 # ---------------------------------------------------------------------------
 
+
 def _setup_ai_features() -> None:
     """Ask about AI scoring/tailoring — optional LLM configuration."""
-    console.print(Panel(
-        "[bold]Step 4: AI Features (optional)[/bold]\n"
-        "An LLM powers job scoring, resume tailoring, and cover letters.\n"
-        "Without this, you can still discover and enrich jobs."
-    ))
+    console.print(
+        Panel(
+            "[bold]Step 4: AI Features (optional)[/bold]\n"
+            "An LLM powers job scoring, resume tailoring, and cover letters.\n"
+            "Without this, you can still discover and enrich jobs."
+        )
+    )
 
     if not Confirm.ask("Enable AI scoring and resume tailoring?", default=True):
         console.print("[dim]Discovery-only mode. You can configure AI later with [bold]applypilot init[/bold].[/dim]")
         return
 
-    console.print(
-        "Supported providers: [bold]OpenAI, Claude (Anthropic), Gemini, Ollama[/bold]"
-    )
+    console.print("Supported providers: [bold]OpenAI, Claude (Anthropic), Gemini, Ollama[/bold]")
     provider = Prompt.ask(
         "Provider",
         choices=["openai", "anthropic", "gemini", "ollama"],
@@ -290,13 +314,16 @@ def _setup_ai_features() -> None:
 # Auto-Apply
 # ---------------------------------------------------------------------------
 
+
 def _setup_auto_apply() -> None:
     """Configure autonomous job application (requires Claude Code CLI)."""
-    console.print(Panel(
-        "[bold]Step 5: Auto-Apply (optional)[/bold]\n"
-        "ApplyPilot can autonomously fill and submit job applications\n"
-        "using Claude Code as the browser agent."
-    ))
+    console.print(
+        Panel(
+            "[bold]Step 5: Auto-Apply (optional)[/bold]\n"
+            "ApplyPilot can autonomously fill and submit job applications\n"
+            "using Claude Code as the browser agent."
+        )
+    )
 
     if not Confirm.ask("Enable autonomous job applications?", default=True):
         console.print("[dim]You can apply manually using the tailored resumes ApplyPilot generates.[/dim]")
@@ -336,6 +363,7 @@ def _setup_auto_apply() -> None:
 # Main entry
 # ---------------------------------------------------------------------------
 
+
 def run_wizard() -> None:
     """Run the full interactive setup wizard."""
     console.print()
@@ -373,7 +401,7 @@ def run_wizard() -> None:
     console.print()
 
     # Done — show tier status
-    from applypilot.config import get_tier, TIER_LABELS, TIER_COMMANDS
+    from applypilot.config import TIER_COMMANDS, TIER_LABELS, get_tier
 
     tier = get_tier()
 
@@ -397,9 +425,7 @@ def run_wizard() -> None:
     console.print(
         Panel.fit(
             "[bold green]Setup complete![/bold green]\n\n"
-            f"[bold]Your tier: Tier {tier} — {TIER_LABELS[tier]}[/bold]\n\n"
-            + "\n".join(tier_lines)
-            + unlock_hint,
+            f"[bold]Your tier: Tier {tier} — {TIER_LABELS[tier]}[/bold]\n\n" + "\n".join(tier_lines) + unlock_hint,
             border_style="green",
         )
     )

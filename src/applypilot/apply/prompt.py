@@ -25,6 +25,7 @@ def _build_profile_summary(profile: dict) -> str:
     p = profile
     personal = p["personal"]
     work_auth = p["work_authorization"]
+    mobility = p.get("mobility", {})
     comp = p["compensation"]
     exp = p.get("experience", {})
     avail = p.get("availability", {})
@@ -58,6 +59,7 @@ def _build_profile_summary(profile: dict) -> str:
     # Work authorization
     lines.append(f"Work Auth: {work_auth.get('legally_authorized_to_work', 'See profile')}")
     lines.append(f"Sponsorship Needed: {work_auth.get('require_sponsorship', 'See profile')}")
+    lines.append(f"Willing to Relocate: {'Yes' if mobility.get('willing_to_relocate', False) else 'No'}")
     if work_auth.get("work_permit_type"):
         lines.append(f"Work Permit: {work_auth['work_permit_type']}")
 
@@ -104,6 +106,8 @@ def _build_location_check(profile: dict, search_config: dict) -> str:
     location_cfg = search_config.get("location", {})
     accept_patterns = location_cfg.get("accept_patterns", [])
     primary_city = personal.get("city", location_cfg.get("primary", "your city"))
+    primary_country = personal.get("country", "the candidate's current country")
+    willing_to_relocate = profile.get("mobility", {}).get("willing_to_relocate", False)
 
     # Build the list of acceptable cities for hybrid/onsite
     if accept_patterns:
@@ -111,13 +115,30 @@ def _build_location_check(profile: dict, search_config: dict) -> str:
     else:
         city_list = primary_city
 
+    if willing_to_relocate:
+        onsite_rule = (
+            f'"Hybrid" or "onsite" in {primary_country} -> ELIGIBLE because '
+            "the candidate is willing to relocate. Do not reject solely because "
+            "the city differs from their current city."
+        )
+        overseas_rule = (
+            '"Hybrid" or "onsite" outside the candidate\'s authorized target '
+            "country -> check work authorization; relocation does not grant "
+            "authorization."
+        )
+    else:
+        onsite_rule = f'"Hybrid" or "onsite" in {city_list} -> ELIGIBLE. Apply.'
+        overseas_rule = (
+            '"Onsite only" or "hybrid only" outside the acceptable city list with no remote option -> NOT ELIGIBLE.'
+        )
+
     return f"""== LOCATION CHECK (do this FIRST before any form) ==
 Read the job page. Determine the work arrangement. Then decide:
 - "Remote" or "work from anywhere" -> ELIGIBLE. Apply.
-- "Hybrid" or "onsite" in {city_list} -> ELIGIBLE. Apply.
+- {onsite_rule}
 - "Hybrid" or "onsite" in another city BUT the posting also says "remote OK" or "remote option available" -> ELIGIBLE. Apply.
-- "Onsite only" or "hybrid only" in any city outside the list above with NO remote option -> NOT ELIGIBLE. Stop immediately. Output RESULT:FAILED:not_eligible_location
-- City is overseas (India, Philippines, Europe, etc.) with no remote option -> NOT ELIGIBLE. Output RESULT:FAILED:not_eligible_location
+- {overseas_rule}
+- If location is not eligible after applying the rules above -> Stop immediately. Output RESULT:FAILED:not_eligible_location
 - Cannot determine location -> Continue applying. If a screening question reveals it's non-local onsite, answer honestly and let the system reject if needed.
 Do NOT fill out forms for jobs that are clearly onsite in a non-acceptable location. Check EARLY, save time."""
 
@@ -172,10 +193,11 @@ def _build_screening_section(profile: dict) -> str:
     years = exp.get("years_of_experience_total", "multiple")
     target_role = exp.get("target_role", personal.get("current_job_title", "software engineer"))
     work_auth = profile["work_authorization"]
+    willing_to_relocate = profile.get("mobility", {}).get("willing_to_relocate", False)
 
     return f"""== SCREENING QUESTIONS (be strategic) ==
 Hard facts -> answer truthfully from the profile. No guessing. This includes:
-  - Location/relocation: lives in {city}, cannot relocate
+  - Location/relocation: lives in {city}; willing to relocate: {"Yes" if willing_to_relocate else "No"}
   - Work authorization: {work_auth.get("legally_authorized_to_work", "see profile")}
   - Citizenship, clearance, licenses, certifications: answer from profile only
   - Criminal/background: answer from profile only
@@ -587,7 +609,7 @@ def build_prompt(
 == JOB ==
 URL: {job.get("application_url") or job["url"]}
 Title: {job["title"]}
-Company: {job.get("site", "Unknown")}
+Company: {job.get("company") or job.get("site", "Unknown")}
 Fit Score: {job.get("fit_score", "N/A")}/10
 
 == FILES ==

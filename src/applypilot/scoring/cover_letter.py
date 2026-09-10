@@ -27,6 +27,7 @@ MAX_ATTEMPTS = 5  # max cross-run retries before giving up
 
 # ── Prompt Builder (profile-driven) ──────────────────────────────────────
 
+
 def _build_cover_letter_prompt(profile: dict) -> str:
     """Build the cover letter system prompt from the user's profile.
 
@@ -101,6 +102,7 @@ Start DIRECTLY with "Dear Hiring Manager," and end with the name."""
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
+
 def _strip_preamble(text: str) -> str:
     """Remove LLM preamble before 'Dear Hiring Manager,' if present.
 
@@ -116,9 +118,13 @@ def _strip_preamble(text: str) -> str:
 
 # ── Core Generation ──────────────────────────────────────────────────────
 
+
 def generate_cover_letter(
-    resume_text: str, job: dict, profile: dict,
-    max_retries: int = 3, validation_mode: str = "normal",
+    resume_text: str,
+    job: dict,
+    profile: dict,
+    max_retries: int = 3,
+    validation_mode: str = "normal",
 ) -> str:
     """Generate a cover letter with fresh context on each retry + auto-sanitize.
 
@@ -135,9 +141,10 @@ def generate_cover_letter(
     Returns:
         The cover letter text (best attempt even if validation failed).
     """
+    company = job.get("company") or job["site"]
     job_text = (
         f"TITLE: {job['title']}\n"
-        f"COMPANY: {job['site']}\n"
+        f"COMPANY: {company}\n"
         f"LOCATION: {job.get('location', 'N/A')}\n\n"
         f"DESCRIPTION:\n{(job.get('full_description') or '')[:6000]}"
     )
@@ -151,17 +158,14 @@ def generate_cover_letter(
         # Fresh conversation every attempt
         prompt = cl_prompt_base
         if avoid_notes:
-            prompt += "\n\n## AVOID THESE ISSUES:\n" + "\n".join(
-                f"- {n}" for n in avoid_notes[-5:]
-            )
+            prompt += "\n\n## AVOID THESE ISSUES:\n" + "\n".join(f"- {n}" for n in avoid_notes[-5:])
 
         messages = [
             {"role": "system", "content": prompt},
-            {"role": "user", "content": (
-                f"RESUME:\n{resume_text}\n\n---\n\n"
-                f"TARGET JOB:\n{job_text}\n\n"
-                "Write the cover letter:"
-            )},
+            {
+                "role": "user",
+                "content": (f"RESUME:\n{resume_text}\n\n---\n\nTARGET JOB:\n{job_text}\n\nWrite the cover letter:"),
+            },
         ]
 
         letter = client.chat(messages, max_tokens=1024, temperature=0.7)
@@ -176,13 +180,16 @@ def generate_cover_letter(
         # Warnings never block — only hard errors trigger a retry
         log.debug(
             "Cover letter attempt %d/%d failed: %s",
-            attempt + 1, max_retries + 1, validation["errors"],
+            attempt + 1,
+            max_retries + 1,
+            validation["errors"],
         )
 
     return letter  # last attempt even if failed
 
 
 # ── Batch Entry Point ────────────────────────────────────────────────────
+
 
 def run_cover_letters(
     min_score: int = 7,
@@ -219,8 +226,7 @@ def run_cover_letters(
         params.append(job_url)
     params.append(limit)
     jobs = conn.execute(
-        f"SELECT * FROM jobs WHERE {' AND '.join(where)} "
-        "ORDER BY fit_score DESC LIMIT ?",
+        f"SELECT * FROM jobs WHERE {' AND '.join(where)} ORDER BY fit_score DESC LIMIT ?",
         params,
     ).fetchall()
 
@@ -236,7 +242,8 @@ def run_cover_letters(
     COVER_LETTER_DIR.mkdir(parents=True, exist_ok=True)
     log.info(
         "Generating cover letters for %d jobs (score >= %d)...",
-        len(jobs), min_score,
+        len(jobs),
+        min_score,
     )
     t0 = time.time()
     completed = 0
@@ -246,12 +253,12 @@ def run_cover_letters(
     for job in jobs:
         completed += 1
         try:
-            letter = generate_cover_letter(resume_text, job, profile,
-                                          validation_mode=validation_mode)
+            letter = generate_cover_letter(resume_text, job, profile, validation_mode=validation_mode)
 
             # Build safe filename prefix
             safe_title = re.sub(r"[^\w\s-]", "", job["title"])[:50].strip().replace(" ", "_")
-            safe_site = re.sub(r"[^\w\s-]", "", job["site"])[:20].strip().replace(" ", "_")
+            company = job.get("company") or job["site"]
+            safe_site = re.sub(r"[^\w\s-]", "", company)[:20].strip().replace(" ", "_")
             prefix = f"{safe_site}_{safe_title}"
 
             cl_path = COVER_LETTER_DIR / f"{prefix}_CL.txt"
@@ -261,6 +268,7 @@ def run_cover_letters(
             pdf_path = None
             try:
                 from applypilot.scoring.pdf import convert_to_pdf
+
                 pdf_path = str(convert_to_pdf(cl_path))
             except Exception:
                 log.debug("PDF generation failed for %s", cl_path, exc_info=True)
@@ -271,6 +279,7 @@ def run_cover_letters(
                 "pdf_path": pdf_path,
                 "title": job["title"],
                 "site": job["site"],
+                "company": company,
             }
             results.append(result)
 
@@ -278,12 +287,19 @@ def run_cover_letters(
             rate = completed / elapsed if elapsed > 0 else 0
             log.info(
                 "%d/%d [OK] | %.1f jobs/min | %s",
-                completed, len(jobs), rate * 60, result["title"][:40],
+                completed,
+                len(jobs),
+                rate * 60,
+                result["title"][:40],
             )
         except Exception as e:
             result = {
-                "url": job["url"], "title": job["title"], "site": job["site"],
-                "path": None, "pdf_path": None, "error": str(e),
+                "url": job["url"],
+                "title": job["title"],
+                "site": job["site"],
+                "path": None,
+                "pdf_path": None,
+                "error": str(e),
             }
             error_count += 1
             results.append(result)

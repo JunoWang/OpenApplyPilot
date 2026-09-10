@@ -13,6 +13,7 @@ OpenApplyPilot is local-first. The default data root is:
 ├── archives/
 ├── application_reviews/
 ├── auto_apply_checkpoints.db
+├── chrome-workers/          # isolated copy of only the selected Chrome account profile
 ├── logs/
 ├── tailored_resumes/
 └── cover_letters/
@@ -20,6 +21,9 @@ OpenApplyPilot is local-first. The default data root is:
 
 Set `OPENAPPLYPILOT_HOME` to use a different root. The database, credentials,
 profile, resume, and archives are restricted to the current macOS user.
+The auto-apply browser account is selected by `browser.chrome_account_email`
+in `profile.json`. Chrome's profile metadata is used to locate it; cookies and
+passwords are not inspected by OpenApplyPilot.
 
 ## Database schema v4
 

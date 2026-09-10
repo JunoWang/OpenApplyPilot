@@ -6,6 +6,7 @@ from docx import Document
 
 from applypilot.scoring.pdf import (
     _record_export_artifacts,
+    build_cover_letter_html,
     build_html,
     convert_to_docx,
     parse_resume,
@@ -80,9 +81,7 @@ TAILORED_DATA = {
         {
             "header": "AI Research Intern at Example Lab",
             "subtitle": "Python | 2025 - Present",
-            "bullets": [
-                "Built an agentic AI evaluation pipeline and improved accuracy by 10%."
-            ],
+            "bullets": ["Built an agentic AI evaluation pipeline and improved accuracy by 10%."],
         }
     ],
     "projects": [
@@ -100,9 +99,7 @@ def _tailored_text() -> str:
     return assemble_resume_text(
         TAILORED_DATA,
         PROFILE,
-        original_education=(
-            "University at Buffalo | Ph.D. Candidate, Computer Science | 2023 - Present"
-        ),
+        original_education=("University at Buffalo | Ph.D. Candidate, Computer Science | 2023 - Present"),
         original_publications="First Author - Agent Evaluation, VLDB, 2023",
     )
 
@@ -136,9 +133,7 @@ def test_source_grounded_validation_rejects_new_skill_and_number() -> None:
 
 def test_project_identity_is_immutable() -> None:
     identities = _extract_project_identities(MASTER_RESUME)
-    assert identities == [
-        {"header": "Research Copilot", "subtitle": "Python, RAG | 2026"}
-    ]
+    assert identities == [{"header": "Research Copilot", "subtitle": "Python, RAG | 2026"}]
 
     accepted_data = deepcopy(TAILORED_DATA)
     accepted_data["education"] = "University at Buffalo"
@@ -212,6 +207,16 @@ def test_html_escapes_resume_content() -> None:
     assert "First Author - Agent Evaluation" in rendered
     assert '<div class="education">University at Buffalo' in rendered
     assert "AI <researcher> & builder" not in rendered
+
+
+def test_cover_letter_uses_dedicated_left_aligned_layout() -> None:
+    rendered = build_cover_letter_html("Dear Hiring Manager,\n\nI built a production system.\n\nJuno Wang")
+
+    assert "text-align: left" in rendered
+    assert "0.75in 0.85in" in rendered
+    assert "Dear Hiring Manager," in rendered
+    assert "I built a production system." in rendered
+    assert "text-align: center" not in rendered
 
 
 def test_export_paths_are_added_to_audit_report(tmp_path: Path) -> None:

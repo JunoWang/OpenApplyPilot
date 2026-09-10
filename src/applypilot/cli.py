@@ -124,6 +124,28 @@ def migrate(
     console.print()
 
 
+@app.command("add")
+def add_job(
+    url: str = typer.Argument(..., help="LinkedIn job or search-result URL."),
+) -> None:
+    """Import one selected job and save its complete JD locally."""
+    _bootstrap()
+    from applypilot.ingest import import_job_url
+
+    try:
+        job = import_job_url(url)
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]Could not import job:[/red] {exc}")
+        raise typer.Exit(code=1) from None
+
+    console.print("\n[bold green]Job imported[/bold green]")
+    console.print(f"  Title:    {job['title']}")
+    console.print(f"  Company:  {job['company']}")
+    console.print(f"  Location: {job['location']}")
+    console.print(f"  URL:      {job['url']}")
+    console.print("  JD:       saved to local history")
+
+
 @app.command()
 def run(
     stages: Optional[list[str]] = typer.Argument(
