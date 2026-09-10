@@ -4,7 +4,7 @@
 
 # ApplyPilot
 
-**Applied to 1,000 jobs in 2 days. Fully autonomous. Open source.**
+**Local-first, human-approved job application automation. Open source.**
 
 [![PyPI version](https://img.shields.io/pypi/v/applypilot?color=blue)](https://pypi.org/project/applypilot/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
@@ -21,20 +21,19 @@ https://github.com/user-attachments/assets/7ee3417f-43d4-4245-9952-35df1e77f2df
 
 ## What It Does
 
-ApplyPilot is a 6-stage autonomous job application pipeline. It discovers jobs across 5+ boards, scores them against your resume with AI, tailors your resume per job, writes cover letters, and **submits applications for you**. It navigates forms, uploads documents, answers screening questions, all hands-free.
+ApplyPilot is a 6-stage job application pipeline. It discovers jobs across 5+ boards, scores them against your resume with AI, tailors your resume per job, writes cover letters, and prepares browser applications. Auto-Apply requires explicit approval of the materials and a second explicit approval immediately before submission.
 
 Three commands. That's it.
 
 ```bash
-pip install applypilot
+pip install 'applypilot[auto-apply]'
 pip install --no-deps python-jobspy && pip install pydantic tls-client requests markdownify regex
 applypilot init          # one-time setup: resume, profile, preferences, API keys
 applypilot doctor        # verify your setup — shows what's installed and what's missing
 applypilot run           # discover > enrich > score > tailor > cover letters
 applypilot run -w 4      # same but parallel (4 threads for discovery/enrichment)
-applypilot apply         # autonomous browser-driven submission
-applypilot apply -w 3    # parallel apply (3 Chrome instances)
-applypilot apply --dry-run  # fill forms without submitting
+applypilot apply --url URL --dry-run  # approve materials, fill form, never submit
+applypilot apply --url URL            # two approvals; second gate controls Submit
 ```
 
 > **Why two install commands?** `python-jobspy` pins an exact numpy version in its metadata that conflicts with pip's resolver, but works fine at runtime with any modern numpy. The `--no-deps` flag bypasses the resolver; the second command installs jobspy's actual runtime dependencies. Everything except `python-jobspy` installs normally.
@@ -46,7 +45,7 @@ applypilot apply --dry-run  # fill forms without submitting
 ### Full Pipeline (recommended)
 **Requires:** Python 3.11+, one supported LLM provider, Node.js (for npx), Claude Code CLI, Chrome
 
-Runs all 6 stages, from job discovery to autonomous application submission. This is the full power of ApplyPilot.
+Runs all 6 stages, from job discovery to a reviewed application submission. Stage 6A intentionally handles one selected job at a time and disables continuous/bulk submission until the safety workflow is validated.
 
 ### Discovery + Tailoring Only
 **Requires:** Python 3.11+ and OpenAI, Anthropic, Gemini, or Ollama
@@ -64,7 +63,7 @@ Runs stages 1-5: discovers jobs, scores them, tailors your resume, generates cov
 | **3. Score** | AI rates every job 1-10 based on your resume and preferences. Only high-fit jobs proceed |
 | **4. Tailor** | AI rewrites your resume per job: reorganizes, emphasizes relevant experience, adds keywords. Never fabricates |
 | **5. Cover Letter** | AI generates a targeted cover letter per job |
-| **6. Auto-Apply** | Claude Code navigates application forms, fills fields, uploads documents, answers questions, and submits |
+| **6. Auto-Apply** | Claude Code prepares one selected form; LangGraph checkpoints material approval and final submission approval locally |
 
 Each stage is independent. Run them all or pick what you need.
 
@@ -77,7 +76,7 @@ Each stage is independent. Run them all or pick what you need.
 | Job discovery | 5 boards + Workday + direct sites | LinkedIn only | One board at a time |
 | AI scoring | 1-10 fit score per job | Basic filtering | Your gut feeling |
 | Resume tailoring | Per-job AI rewrite | Template-based | Hours per application |
-| Auto-apply | Full form navigation + submission | LinkedIn Easy Apply only | Click, type, repeat |
+| Auto-apply | Full form navigation with two human approval gates | LinkedIn Easy Apply only | Click, type, repeat |
 | Supported sites | Indeed, LinkedIn, Glassdoor, ZipRecruiter, Google Jobs, 46 Workday portals, 28 direct sites | LinkedIn | Whatever you open |
 | License | AGPL-3.0 | MIT | N/A |
 
@@ -138,6 +137,8 @@ OpenApplyPilot keeps personal data on the local machine by default:
 | `~/.openapplypilot/.env` | Provider keys; created with owner-only permissions |
 | `~/.openapplypilot/tailored_resumes/` | Per-job tailored resumes |
 | `~/.openapplypilot/cover_letters/` | Per-job cover letters |
+| `~/.openapplypilot/application_reviews/` | Final review screenshots and submission evidence |
+| `~/.openapplypilot/auto_apply_checkpoints.db` | Local LangGraph approval and resume checkpoints |
 | `~/.openapplypilot/logs/openapplypilot.log` | Rotating, credential-redacted runtime log |
 | `~/.openapplypilot/archives/` | Content-addressed legacy database backups |
 
@@ -179,7 +180,9 @@ invented project fails validation before DOCX/PDF export.
 Writes a targeted cover letter per job referencing the specific company, role, and how your experience maps to their requirements.
 
 ### Auto-Apply
-Claude Code launches a Chrome instance, navigates to each application page, detects the form type, fills personal information and work history, uploads the tailored resume and cover letter, answers screening questions with AI, and submits. A live dashboard shows progress in real-time.
+Claude Code launches a Chrome instance, navigates to the selected application page, fills personal information and work history, uploads the tailored resume and cover letter, and answers screening questions. LangGraph pauses before browser preparation for material approval and again on the completed form before the separate submit phase. Review screenshots, form answers, agent logs, approval times, and submission evidence remain under `~/.openapplypilot/`.
+
+Stage 6A requires `--url`, one visible worker, and no continuous mode. A dry run ends at `ready_for_review`; it can never set the job to applied or consume the production retry budget. LangSmith tracing is disabled unless `OPENAPPLYPILOT_LANGSMITH_OPT_IN=true` is explicitly configured.
 
 The Playwright MCP server is configured automatically at runtime per worker. No manual MCP setup needed.
 
@@ -207,12 +210,10 @@ applypilot run --validation lenient     # Relax validation (recommended for Gemi
 applypilot run --validation strict      # Strictest validation (retries on any banned word)
 applypilot run score tailor pdf \
   --url JOB_URL --limit 1               # Safely test one stored job end to end
-applypilot apply                        # Launch auto-apply
-applypilot apply --workers 3            # Parallel browser workers
-applypilot apply --dry-run              # Fill forms without submitting
-applypilot apply --continuous           # Run forever, polling for new jobs
-applypilot apply --headless             # Headless browser mode
-applypilot apply --url URL              # Apply to a specific job
+applypilot apply --url URL --dry-run    # Approve materials and stop at review
+applypilot apply --url URL              # Review, then explicitly approve Submit
+applypilot apply --resume APPLICATION_ID # Continue a saved application with fresh review
+applypilot apply --url URL --headless   # Supported, but visible review is recommended
 applypilot status                       # Pipeline statistics
 applypilot dashboard                    # Open HTML results dashboard
 ```

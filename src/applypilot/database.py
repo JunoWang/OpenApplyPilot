@@ -19,7 +19,7 @@ from applypilot.config import DB_PATH
 # (required for SQLite thread safety with parallel workers)
 _local = threading.local()
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _utc_now() -> str:
@@ -40,7 +40,7 @@ def get_connection(db_path: Path | str | None = None) -> sqlite3.Connection:
     """
     path = str(db_path or DB_PATH)
 
-    if not hasattr(_local, 'connections'):
+    if not hasattr(_local, "connections"):
         _local.connections = {}
 
     conn = _local.connections.get(path)
@@ -63,7 +63,7 @@ def get_connection(db_path: Path | str | None = None) -> sqlite3.Connection:
 def close_connection(db_path: Path | str | None = None) -> None:
     """Close the cached connection for the current thread."""
     path = str(db_path or DB_PATH)
-    if hasattr(_local, 'connections'):
+    if hasattr(_local, "connections"):
         conn = _local.connections.pop(path, None)
         if conn is not None:
             conn.close()
@@ -163,6 +163,7 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
     # Run migrations for any columns added after initial schema
     ensure_columns(conn)
     _create_v2_tables(conn)
+    _ensure_application_columns(conn)
     conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     conn.execute(
         "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
@@ -306,6 +307,11 @@ def _create_v2_tables(conn: sqlite3.Connection) -> None:
             material_approved_at  TEXT,
             final_approved_at     TEXT,
             submitted_at          TEXT,
+            workflow_thread_id    TEXT,
+            agent_log_path        TEXT,
+            submission_snapshot_path TEXT,
+            last_error            TEXT,
+            verification_confidence TEXT,
             created_at            TEXT NOT NULL,
             updated_at            TEXT NOT NULL,
             FOREIGN KEY (job_url) REFERENCES jobs(url)
@@ -327,6 +333,28 @@ def _create_v2_tables(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_applications_status
             ON applications(status, updated_at DESC);
     """)
+
+
+_APPLICATION_COLUMNS: dict[str, str] = {
+    "workflow_thread_id": "TEXT",
+    "agent_log_path": "TEXT",
+    "submission_snapshot_path": "TEXT",
+    "last_error": "TEXT",
+    "verification_confidence": "TEXT",
+}
+
+
+def _ensure_application_columns(conn: sqlite3.Connection) -> list[str]:
+    """Add Stage 6A application evidence/checkpoint columns in place."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(applications)").fetchall()}
+    added: list[str] = []
+    for column, dtype in _APPLICATION_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE applications ADD COLUMN {column} {dtype}")
+            added.append(column)
+    if added:
+        conn.commit()
+    return added
 
 
 def set_metadata(key: str, value: str, conn: sqlite3.Connection | None = None) -> None:
@@ -532,15 +560,16 @@ def create_application_record(
         """,
         (job_url,),
     ).fetchone()
-    now = _utc_now()
     application_id = str(uuid.uuid4())
+    now = _utc_now()
+    resume_path = job["tailored_pdf_path"] or job["tailored_resume_path"]
     conn.execute(
         """
         INSERT INTO applications (
             id, job_url, jd_snapshot_id, company, job_title, application_url,
             status, resume_path, cover_letter_path, form_answers_json,
-            created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            workflow_thread_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             application_id,
@@ -550,9 +579,10 @@ def create_application_record(
             job["title"],
             job["application_url"] or job_url,
             status,
-            job["tailored_resume_path"],
+            resume_path,
             job["cover_letter_path"],
             json.dumps(form_answers or {}, sort_keys=True),
+            application_id,
             now,
             now,
         ),
@@ -563,13 +593,19 @@ def create_application_record(
 
 def update_application_record(
     application_id: str,
-    status: str,
+    status: str | None,
     *,
     form_answers: dict | None = None,
+    review_snapshot_path: str | None = None,
+    submission_snapshot_path: str | None = None,
+    agent_log_path: str | None = None,
+    last_error: str | None = None,
+    verification_confidence: str | None = None,
+    workflow_thread_id: str | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> None:
     """Update application status while preserving review/approval timestamps."""
-    if status not in _APPLICATION_STATUSES:
+    if status is not None and status not in _APPLICATION_STATUSES:
         raise ValueError(f"Unsupported application status: {status}")
     if conn is None:
         conn = get_connection()
@@ -579,11 +615,26 @@ def update_application_record(
         "approved": "final_approved_at",
         "submitted": "submitted_at",
     }.get(status)
-    assignments = ["status = ?", "updated_at = ?"]
-    params: list = [status, now]
+    assignments = ["updated_at = ?"]
+    params: list = [now]
+    if status is not None:
+        assignments.append("status = ?")
+        params.append(status)
     if form_answers is not None:
         assignments.append("form_answers_json = ?")
         params.append(json.dumps(form_answers, sort_keys=True))
+    optional_values = {
+        "review_snapshot_path": review_snapshot_path,
+        "submission_snapshot_path": submission_snapshot_path,
+        "agent_log_path": agent_log_path,
+        "last_error": last_error,
+        "verification_confidence": verification_confidence,
+        "workflow_thread_id": workflow_thread_id,
+    }
+    for column, value in optional_values.items():
+        if value is not None:
+            assignments.append(f"{column} = ?")
+            params.append(value)
     if timestamp_column:
         assignments.append(f"{timestamp_column} = ?")
         params.append(now)
@@ -595,6 +646,25 @@ def update_application_record(
     if cursor.rowcount != 1:
         raise KeyError(f"Application not found: {application_id}")
     conn.commit()
+
+
+def get_application_record(
+    application_id: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict:
+    """Return one application record with decoded form answers."""
+    if conn is None:
+        conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM applications WHERE id = ?",
+        (application_id,),
+    ).fetchone()
+    if row is None:
+        raise KeyError(f"Application not found: {application_id}")
+    item = dict(row)
+    item["form_answers"] = json.loads(item.pop("form_answers_json") or "{}")
+    return item
 
 
 def list_application_records(
@@ -677,32 +747,23 @@ def get_stats(conn: sqlite3.Connection | None = None) -> dict:
     stats["total"] = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
 
     # By site breakdown
-    rows = conn.execute(
-        "SELECT site, COUNT(*) as cnt FROM jobs GROUP BY site ORDER BY cnt DESC"
-    ).fetchall()
+    rows = conn.execute("SELECT site, COUNT(*) as cnt FROM jobs GROUP BY site ORDER BY cnt DESC").fetchall()
     stats["by_site"] = [(row[0], row[1]) for row in rows]
 
     # Enrichment stage
-    stats["pending_detail"] = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE detail_scraped_at IS NULL"
-    ).fetchone()[0]
+    stats["pending_detail"] = conn.execute("SELECT COUNT(*) FROM jobs WHERE detail_scraped_at IS NULL").fetchone()[0]
 
-    stats["with_description"] = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE full_description IS NOT NULL"
-    ).fetchone()[0]
+    stats["with_description"] = conn.execute("SELECT COUNT(*) FROM jobs WHERE full_description IS NOT NULL").fetchone()[
+        0
+    ]
 
-    stats["detail_errors"] = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE detail_error IS NOT NULL"
-    ).fetchone()[0]
+    stats["detail_errors"] = conn.execute("SELECT COUNT(*) FROM jobs WHERE detail_error IS NOT NULL").fetchone()[0]
 
     # Scoring stage
-    stats["scored"] = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE fit_score IS NOT NULL"
-    ).fetchone()[0]
+    stats["scored"] = conn.execute("SELECT COUNT(*) FROM jobs WHERE fit_score IS NOT NULL").fetchone()[0]
 
     stats["unscored"] = conn.execute(
-        "SELECT COUNT(*) FROM jobs "
-        "WHERE full_description IS NOT NULL AND fit_score IS NULL"
+        "SELECT COUNT(*) FROM jobs WHERE full_description IS NOT NULL AND fit_score IS NULL"
     ).fetchone()[0]
 
     # Score distribution
@@ -714,9 +775,7 @@ def get_stats(conn: sqlite3.Connection | None = None) -> dict:
     stats["score_distribution"] = [(row[0], row[1]) for row in dist_rows]
 
     # Tailoring stage
-    stats["tailored"] = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE tailored_resume_path IS NOT NULL"
-    ).fetchone()[0]
+    stats["tailored"] = conn.execute("SELECT COUNT(*) FROM jobs WHERE tailored_resume_path IS NOT NULL").fetchone()[0]
 
     stats["untailored_eligible"] = conn.execute(
         "SELECT COUNT(*) FROM jobs "
@@ -725,9 +784,7 @@ def get_stats(conn: sqlite3.Connection | None = None) -> dict:
     ).fetchone()[0]
 
     stats["tailor_exhausted"] = conn.execute(
-        "SELECT COUNT(*) FROM jobs "
-        "WHERE COALESCE(tailor_attempts, 0) >= 5 "
-        "AND tailored_resume_path IS NULL"
+        "SELECT COUNT(*) FROM jobs WHERE COALESCE(tailor_attempts, 0) >= 5 AND tailored_resume_path IS NULL"
     ).fetchone()[0]
 
     # Cover letter stage
@@ -742,13 +799,9 @@ def get_stats(conn: sqlite3.Connection | None = None) -> dict:
     ).fetchone()[0]
 
     # Application stage
-    stats["applied"] = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE applied_at IS NOT NULL"
-    ).fetchone()[0]
+    stats["applied"] = conn.execute("SELECT COUNT(*) FROM jobs WHERE applied_at IS NOT NULL").fetchone()[0]
 
-    stats["apply_errors"] = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE apply_error IS NOT NULL"
-    ).fetchone()[0]
+    stats["apply_errors"] = conn.execute("SELECT COUNT(*) FROM jobs WHERE apply_error IS NOT NULL").fetchone()[0]
 
     stats["ready_to_apply"] = conn.execute(
         "SELECT COUNT(*) FROM jobs "
@@ -758,21 +811,14 @@ def get_stats(conn: sqlite3.Connection | None = None) -> dict:
     ).fetchone()[0]
 
     # Local history and observability
-    stats["jd_snapshots"] = conn.execute(
-        "SELECT COUNT(*) FROM jd_snapshots"
-    ).fetchone()[0]
-    stats["pipeline_runs"] = conn.execute(
-        "SELECT COUNT(*) FROM pipeline_runs"
-    ).fetchone()[0]
-    stats["applications"] = conn.execute(
-        "SELECT COUNT(*) FROM applications"
-    ).fetchone()[0]
+    stats["jd_snapshots"] = conn.execute("SELECT COUNT(*) FROM jd_snapshots").fetchone()[0]
+    stats["pipeline_runs"] = conn.execute("SELECT COUNT(*) FROM pipeline_runs").fetchone()[0]
+    stats["applications"] = conn.execute("SELECT COUNT(*) FROM applications").fetchone()[0]
 
     return stats
 
 
-def store_jobs(conn: sqlite3.Connection, jobs: list[dict],
-               site: str, strategy: str) -> tuple[int, int]:
+def store_jobs(conn: sqlite3.Connection, jobs: list[dict], site: str, strategy: str) -> tuple[int, int]:
     """Store discovered jobs, skipping duplicates by URL.
 
     Args:
@@ -797,8 +843,19 @@ def store_jobs(conn: sqlite3.Connection, jobs: list[dict],
                 "INSERT INTO jobs (url, title, company, salary, description, location, site, strategy, "
                 "discovered_at, last_seen_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (url, job.get("title"), job.get("company"), job.get("salary"),
-                 job.get("description"), job.get("location"), site, strategy, now, now, now),
+                (
+                    url,
+                    job.get("title"),
+                    job.get("company"),
+                    job.get("salary"),
+                    job.get("description"),
+                    job.get("location"),
+                    site,
+                    strategy,
+                    now,
+                    now,
+                    now,
+                ),
             )
             new += 1
         except sqlite3.IntegrityError:
@@ -812,11 +869,13 @@ def store_jobs(conn: sqlite3.Connection, jobs: list[dict],
     return new, existing
 
 
-def get_jobs_by_stage(conn: sqlite3.Connection | None = None,
-                      stage: str = "discovered",
-                      min_score: int | None = None,
-                      limit: int = 100,
-                      job_url: str | None = None) -> list[dict]:
+def get_jobs_by_stage(
+    conn: sqlite3.Connection | None = None,
+    stage: str = "discovered",
+    min_score: int | None = None,
+    limit: int = 100,
+    job_url: str | None = None,
+) -> list[dict]:
     """Fetch jobs filtered by pipeline stage.
 
     Args:
@@ -843,10 +902,7 @@ def get_jobs_by_stage(conn: sqlite3.Connection | None = None,
             "AND tailored_resume_path IS NULL AND COALESCE(tailor_attempts, 0) < 5"
         ),
         "tailored": "tailored_resume_path IS NOT NULL",
-        "pending_apply": (
-            "tailored_resume_path IS NOT NULL AND applied_at IS NULL "
-            "AND application_url IS NOT NULL"
-        ),
+        "pending_apply": ("tailored_resume_path IS NOT NULL AND applied_at IS NULL AND application_url IS NOT NULL"),
         "applied": "applied_at IS NOT NULL",
     }
 

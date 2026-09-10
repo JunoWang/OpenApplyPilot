@@ -10,15 +10,15 @@ Generates a self-contained HTML dashboard with:
 
 from __future__ import annotations
 
-import os
+import json
 import webbrowser
 from html import escape
 from pathlib import Path
 
 from rich.console import Console
 
-from applypilot.config import APP_DIR, DB_PATH
-from applypilot.database import get_connection
+from applypilot.config import APP_DIR
+from applypilot.database import get_connection, list_application_records
 
 console = Console()
 
@@ -39,15 +39,10 @@ def generate_dashboard(output_path: str | None = None) -> str:
     # Stats
     total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
     ready = conn.execute(
-        "SELECT COUNT(*) FROM jobs "
-        "WHERE full_description IS NOT NULL AND application_url IS NOT NULL"
+        "SELECT COUNT(*) FROM jobs WHERE full_description IS NOT NULL AND application_url IS NOT NULL"
     ).fetchone()[0]
-    scored = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE fit_score IS NOT NULL"
-    ).fetchone()[0]
-    high_fit = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE fit_score >= 7"
-    ).fetchone()[0]
+    scored = conn.execute("SELECT COUNT(*) FROM jobs WHERE fit_score IS NOT NULL").fetchone()[0]
+    high_fit = conn.execute("SELECT COUNT(*) FROM jobs WHERE fit_score >= 7").fetchone()[0]
 
     # Score distribution
     score_dist: dict[int, int] = {}
@@ -82,14 +77,57 @@ def generate_dashboard(output_path: str | None = None) -> str:
         ORDER BY fit_score DESC, site, title
     """).fetchall()
 
+    applications = list_application_records(limit=100, conn=conn)
+    application_rows = ""
+    for application in applications:
+        application_id = escape(application.get("id") or "")
+        status = escape(application.get("status") or "draft")
+        company = escape(application.get("company") or "Unknown")
+        title = escape(application.get("job_title") or "Untitled")
+        application_url = escape(application.get("application_url") or "")
+        updated_at = escape((application.get("updated_at") or "")[:19])
+        answers = escape(json.dumps(application.get("form_answers") or {}, indent=2, sort_keys=True))
+
+        artifact_links: list[str] = []
+        for key, label in (
+            ("resume_path", "Resume"),
+            ("cover_letter_path", "Cover letter"),
+            ("review_snapshot_path", "Review screenshot"),
+            ("submission_snapshot_path", "Submission proof"),
+            ("agent_log_path", "Agent log"),
+        ):
+            raw_path = application.get(key)
+            if raw_path and Path(raw_path).exists():
+                href = escape(Path(raw_path).resolve().as_uri())
+                artifact_links.append(f'<a href="{href}" target="_blank">{label}</a>')
+        links = " &middot; ".join(artifact_links) or "No saved artifacts"
+        application_rows += f"""
+        <tr>
+          <td><span class="application-status status-{status}">{status}</span></td>
+          <td><a href="{application_url}" target="_blank">{title}</a><br><span class="muted">{company}</span><br><code>{application_id}</code></td>
+          <td>{links}</td>
+          <td><details><summary>Answers</summary><pre>{answers}</pre></details></td>
+          <td>{updated_at}</td>
+        </tr>"""
+
+    if not application_rows:
+        application_rows = '<tr><td colspan="5" class="muted">No application attempts recorded yet.</td></tr>'
+
     # Color map per site
     colors = {
-        "RemoteOK": "#10b981", "WelcomeToTheJungle": "#f59e0b",
-        "Job Bank Canada": "#3b82f6", "CareerJet Canada": "#8b5cf6",
-        "Hacker News Jobs": "#ff6600", "BuiltIn Remote": "#ec4899",
-        "TD Bank": "#00a651", "CIBC": "#c41f3e", "RBC": "#003168",
-        "indeed": "#2164f3", "linkedin": "#0a66c2",
-        "Dice": "#eb1c26", "Glassdoor": "#0caa41",
+        "RemoteOK": "#10b981",
+        "WelcomeToTheJungle": "#f59e0b",
+        "Job Bank Canada": "#3b82f6",
+        "CareerJet Canada": "#8b5cf6",
+        "Hacker News Jobs": "#ff6600",
+        "BuiltIn Remote": "#ec4899",
+        "TD Bank": "#00a651",
+        "CIBC": "#c41f3e",
+        "RBC": "#003168",
+        "indeed": "#2164f3",
+        "linkedin": "#0a66c2",
+        "Dice": "#eb1c26",
+        "Glassdoor": "#0caa41",
     }
 
     # Score distribution bar chart
@@ -117,10 +155,10 @@ def generate_dashboard(output_path: str | None = None) -> str:
         site_rows += f"""
         <div class="site-row">
           <div class="site-name" style="color:{color}">{escape(site)}</div>
-          <div class="site-nums">{s['total']} jobs &middot; {s['high_fit']} strong fit &middot; avg score {avg}</div>
+          <div class="site-nums">{s["total"]} jobs &middot; {s["high_fit"]} strong fit &middot; avg score {avg}</div>
           <div class="bar-track">
-            <div class="bar-fill" style="width:{s['high_fit']/max(s['total'],1)*100}%;background:{color}"></div>
-            <div class="bar-fill" style="width:{s['mid_fit']/max(s['total'],1)*100}%;background:{color}66"></div>
+            <div class="bar-fill" style="width:{s["high_fit"] / max(s["total"], 1) * 100}%;background:{color}"></div>
+            <div class="bar-fill" style="width:{s["mid_fit"] / max(s["total"], 1) * 100}%;background:{color}66"></div>
           </div>
         </div>"""
 
@@ -134,8 +172,12 @@ def generate_dashboard(output_path: str | None = None) -> str:
                 job_sections += "</div>"
             score_color = "#10b981" if score >= 7 else "#f59e0b"
             score_label = {
-                10: "Perfect Match", 9: "Excellent Fit", 8: "Strong Fit",
-                7: "Good Fit", 6: "Moderate+", 5: "Moderate",
+                10: "Perfect Match",
+                9: "Excellent Fit",
+                8: "Strong Fit",
+                7: "Good Fit",
+                6: "Moderate+",
+                5: "Moderate",
             }.get(score, f"Score {score}")
             count_at_score = score_dist.get(score, 0)
             job_sections += f"""
@@ -179,16 +221,16 @@ def generate_dashboard(output_path: str | None = None) -> str:
             apply_html = f'<a href="{apply_url}" class="apply-link" target="_blank">Apply</a>'
 
         job_sections += f"""
-        <div class="job-card" data-score="{score}" data-site="{escape(j['site'] or '')}" data-location="{location.lower()}">
+        <div class="job-card" data-score="{score}" data-site="{escape(j["site"] or "")}" data-location="{location.lower()}">
           <div class="card-header">
-            <span class="score-pill" style="background:{'#10b981' if score >= 7 else '#f59e0b'}">{score}</span>
+            <span class="score-pill" style="background:{"#10b981" if score >= 7 else "#f59e0b"}">{score}</span>
             <a href="{url}" class="job-title" target="_blank">{title}</a>
           </div>
           <div class="meta-row">{meta_html}</div>
-          {f'<div class="keywords-row">{escape(keywords)}</div>' if keywords else ''}
-          {f'<div class="reasoning-row">{escape(reasoning)}</div>' if reasoning else ''}
+          {f'<div class="keywords-row">{escape(keywords)}</div>' if keywords else ""}
+          {f'<div class="reasoning-row">{escape(reasoning)}</div>' if reasoning else ""}
           <p class="desc-preview">{desc_preview}...</p>
-          {"<details class='full-desc-details'><summary class='expand-btn'>Full Description (" + f'{desc_len:,}' + " chars)</summary><div class='full-desc'>" + full_desc_html + "</div></details>" if j["full_description"] else ""}
+          {"<details class='full-desc-details'><summary class='expand-btn'>Full Description (" + f"{desc_len:,}" + " chars)</summary><div class='full-desc'>" + full_desc_html + "</div></details>" if j["full_description"] else ""}
           <div class="card-footer">{apply_html}</div>
         </div>"""
 
@@ -217,6 +259,19 @@ def generate_dashboard(output_path: str | None = None) -> str:
   .stat-scored .stat-num {{ color: #60a5fa; }}
   .stat-high .stat-num {{ color: #f59e0b; }}
   .stat-total .stat-num {{ color: #e2e8f0; }}
+
+  /* Application history */
+  .applications {{ background: #1e293b; border-radius: 12px; padding: 1.25rem; margin-bottom: 2rem; overflow-x: auto; }}
+  .applications h2 {{ font-size: 1.1rem; margin-bottom: 1rem; }}
+  .applications table {{ width: 100%; border-collapse: collapse; font-size: 0.8rem; }}
+  .applications th, .applications td {{ padding: 0.65rem; border-bottom: 1px solid #334155; text-align: left; vertical-align: top; }}
+  .applications a {{ color: #60a5fa; text-decoration: none; }}
+  .application-status {{ display: inline-block; padding: 0.2rem 0.45rem; border-radius: 5px; background: #334155; }}
+  .status-submitted {{ background: #064e3b; color: #6ee7b7; }}
+  .status-ready_for_review, .status-approved {{ background: #164e63; color: #67e8f9; }}
+  .status-failed, .status-withdrawn {{ background: #7f1d1d; color: #fecaca; }}
+  .applications pre {{ white-space: pre-wrap; max-width: 420px; color: #cbd5e1; }}
+  .muted {{ color: #94a3b8; }}
 
   /* Filters */
   .filters {{ background: #1e293b; border-radius: 12px; padding: 1.25rem; margin-bottom: 2rem; display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; }}
@@ -302,7 +357,7 @@ def generate_dashboard(output_path: str | None = None) -> str:
 <body>
 
 <h1>ApplyPilot Dashboard</h1>
-<p class="subtitle">{total} jobs &middot; {scored} scored &middot; {high_fit} strong matches (7+)</p>
+<p class="subtitle">{total} jobs &middot; {scored} scored &middot; {high_fit} strong matches (7+) &middot; {len(applications)} application records</p>
 
 <div class="summary">
   <div class="stat-card stat-total"><div class="stat-num">{total}</div><div class="stat-label">Total Jobs</div></div>
@@ -310,6 +365,14 @@ def generate_dashboard(output_path: str | None = None) -> str:
   <div class="stat-card stat-scored"><div class="stat-num">{scored}</div><div class="stat-label">Scored by LLM</div></div>
   <div class="stat-card stat-high"><div class="stat-num">{high_fit}</div><div class="stat-label">Strong Fit (7+)</div></div>
 </div>
+
+<section class="applications">
+  <h2>Application History</h2>
+  <table>
+    <thead><tr><th>Status</th><th>Job</th><th>Artifacts</th><th>Form answers</th><th>Updated</th></tr></thead>
+    <tbody>{application_rows}</tbody>
+  </table>
+</section>
 
 <div class="filters">
   <span class="filter-label">Score:</span>

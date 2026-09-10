@@ -10,9 +10,7 @@ from pathlib import Path
 # location is intentionally separate from the upstream ApplyPilot install.
 LEGACY_APP_DIR = Path.home() / ".applypilot"
 APP_DIR = Path(
-    os.environ.get("OPENAPPLYPILOT_HOME")
-    or os.environ.get("APPLYPILOT_DIR")
-    or Path.home() / ".openapplypilot"
+    os.environ.get("OPENAPPLYPILOT_HOME") or os.environ.get("APPLYPILOT_DIR") or Path.home() / ".openapplypilot"
 ).expanduser()
 
 # Core paths
@@ -28,11 +26,13 @@ TAILORED_DIR = APP_DIR / "tailored_resumes"
 COVER_LETTER_DIR = APP_DIR / "cover_letters"
 LOG_DIR = APP_DIR / "logs"
 ARCHIVE_DIR = APP_DIR / "archives"
+APPLICATION_REVIEW_DIR = APP_DIR / "application_reviews"
 PIPELINE_LOG_PATH = LOG_DIR / "openapplypilot.log"
 
 # Chrome worker isolation
 CHROME_WORKER_DIR = APP_DIR / "chrome-workers"
 APPLY_WORKER_DIR = APP_DIR / "apply-workers"
+APPLY_CHECKPOINT_DB_PATH = APP_DIR / "auto_apply_checkpoints.db"
 
 # Package-shipped config (YAML registries)
 PACKAGE_DIR = Path(__file__).parent
@@ -53,7 +53,8 @@ def get_chrome_path() -> str:
     if system == "Windows":
         candidates = [
             Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "Google/Chrome/Application/chrome.exe",
-            Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")) / "Google/Chrome/Application/chrome.exe",
+            Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
+            / "Google/Chrome/Application/chrome.exe",
             Path(os.environ.get("LOCALAPPDATA", "")) / "Google/Chrome/Application/chrome.exe",
         ]
     elif system == "Darwin":
@@ -78,9 +79,7 @@ def get_chrome_path() -> str:
         if found:
             return found
 
-    raise FileNotFoundError(
-        "Chrome/Chromium not found. Install Chrome or set CHROME_PATH environment variable."
-    )
+    raise FileNotFoundError("Chrome/Chromium not found. Install Chrome or set CHROME_PATH environment variable.")
 
 
 def get_chrome_user_data() -> Path:
@@ -102,6 +101,7 @@ def ensure_dirs():
         COVER_LETTER_DIR,
         LOG_DIR,
         ARCHIVE_DIR,
+        APPLICATION_REVIEW_DIR,
         CHROME_WORKER_DIR,
         APPLY_WORKER_DIR,
     ]:
@@ -112,16 +112,16 @@ def ensure_dirs():
 def load_profile() -> dict:
     """Load the user profile from the configured local data directory."""
     import json
+
     if not PROFILE_PATH.exists():
-        raise FileNotFoundError(
-            f"Profile not found at {PROFILE_PATH}. Run `applypilot init` first."
-        )
+        raise FileNotFoundError(f"Profile not found at {PROFILE_PATH}. Run `applypilot init` first.")
     return json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
 
 
 def load_search_config() -> dict:
     """Load search configuration from the configured local data directory."""
     import yaml
+
     if not SEARCH_CONFIG_PATH.exists():
         # Fall back to package-shipped example
         example = CONFIG_DIR / "searches.example.yaml"
@@ -134,6 +134,7 @@ def load_search_config() -> dict:
 def load_sites_config() -> dict:
     """Load sites.yaml configuration (sites list, manual_ats, blocked, etc.)."""
     import yaml
+
     path = CONFIG_DIR / "sites.yaml"
     if not path.exists():
         return {}
@@ -192,6 +193,7 @@ DEFAULTS = {
 def load_env():
     """Load environment variables from the local data directory."""
     from dotenv import load_dotenv
+
     if ENV_PATH.exists():
         load_dotenv(ENV_PATH)
     # Also try CWD .env as fallback
@@ -262,6 +264,7 @@ def check_tier(required: int, feature: str) -> None:
         return
 
     from rich.console import Console
+
     _console = Console(stderr=True)
 
     missing: list[str] = []

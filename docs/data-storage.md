@@ -11,6 +11,8 @@ OpenApplyPilot is local-first. The default data root is:
 ├── searches.yaml
 ├── .env
 ├── archives/
+├── application_reviews/
+├── auto_apply_checkpoints.db
 ├── logs/
 ├── tailored_resumes/
 └── cover_letters/
@@ -19,7 +21,7 @@ OpenApplyPilot is local-first. The default data root is:
 Set `OPENAPPLYPILOT_HOME` to use a different root. The database, credentials,
 profile, resume, and archives are restricted to the current macOS user.
 
-## Database schema v2
+## Database schema v4
 
 - `jobs`: current job and stage state; AI and application failures remain
   explicit and retryable.
@@ -30,9 +32,27 @@ profile, resume, and archives are restricted to the current macOS user.
 - `stage_events`: append-only stage history associated with a pipeline run and,
   when available, a job.
 - `applications`: form-like application history with material approval, final
-  approval, answers, document paths, and submission timestamps.
+  approval, answers, document paths, review/submission screenshots, agent logs,
+  verification state, and submission timestamps.
 - `system_metadata`: migration provenance and local schema metadata.
 - `schema_migrations`: applied schema versions.
+
+`auto_apply_checkpoints.db` is a separate local LangGraph checkpoint database.
+It allows the browser workflow to stop at approval gates without mixing
+framework-owned checkpoint tables into `openapplypilot.db`. LangSmith tracing is
+off by default; no checkpoint or application data is exported unless the user
+explicitly opts in.
+
+Continue an interrupted or `ready_for_review` application with:
+
+```bash
+applypilot apply --resume APPLICATION_ID
+```
+
+If the original Chrome session no longer exists—or the previous dry run already
+ended—the old reviewed browser state and any final approval are not reusable.
+OpenApplyPilot prepares the form again and requires fresh material and final
+approval before submission.
 
 ## Legacy migration
 

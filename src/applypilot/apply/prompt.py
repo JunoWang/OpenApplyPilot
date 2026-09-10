@@ -75,13 +75,15 @@ def _build_profile_summary(profile: dict) -> str:
     lines.append(f"Available: {avail.get('earliest_start_date', 'Immediately')}")
 
     # Standard responses
-    lines.extend([
-        "Age 18+: Yes",
-        "Background Check: Yes",
-        "Felony: No",
-        "Previously Worked Here: No",
-        "How Heard: Online Job Board",
-    ])
+    lines.extend(
+        [
+            "Age 18+: Yes",
+            "Background Check: Yes",
+            "Felony: No",
+            "Previously Worked Here: No",
+            "How Heard: Online Job Board",
+        ]
+    )
 
     # EEO
     lines.append(f"Gender: {eeo.get('gender', 'Decline to self-identify')}")
@@ -174,7 +176,7 @@ def _build_screening_section(profile: dict) -> str:
     return f"""== SCREENING QUESTIONS (be strategic) ==
 Hard facts -> answer truthfully from the profile. No guessing. This includes:
   - Location/relocation: lives in {city}, cannot relocate
-  - Work authorization: {work_auth.get('legally_authorized_to_work', 'see profile')}
+  - Work authorization: {work_auth.get("legally_authorized_to_work", "see profile")}
   - Citizenship, clearance, licenses, certifications: answer from profile only
   - Criminal/background: answer from profile only
 
@@ -196,7 +198,6 @@ def _build_hard_rules(profile: dict) -> str:
     display_name = f"{preferred_name} {preferred_last}".strip() if preferred_last else preferred_name
 
     # Build work auth rule dynamically
-    auth_info = work_auth.get("legally_authorized_to_work", "")
     sponsorship = work_auth.get("require_sponsorship", "")
     permit_type = work_auth.get("work_permit_type", "")
 
@@ -204,9 +205,11 @@ def _build_hard_rules(profile: dict) -> str:
     if permit_type:
         work_auth_rule = f"Work auth: {permit_type}. Sponsorship needed: {sponsorship}."
 
-    name_rule = f'Name: Legal name = {full_name}.'
+    name_rule = f"Name: Legal name = {full_name}."
     if preferred_name and preferred_name != full_name.split()[0]:
-        name_rule += f' Preferred name = {preferred_name}. Use "{display_name}" unless a field specifically says "legal name".'
+        name_rule += (
+            f' Preferred name = {preferred_name}. Use "{display_name}" unless a field specifically says "legal name".'
+        )
 
     return f"""== HARD RULES (never break these) ==
 1. Never lie about: citizenship, work authorization, criminal history, education credentials, security clearance, licenses.
@@ -225,7 +228,7 @@ def _build_captcha_section() -> str:
 
     return f"""== CAPTCHA ==
 You solve CAPTCHAs via the CapSolver REST API. No browser extension. You control the entire flow.
-API key: {capsolver_key or 'NOT CONFIGURED — skip to MANUAL FALLBACK for all CAPTCHAs'}
+API key: {capsolver_key or "NOT CONFIGURED — skip to MANUAL FALLBACK for all CAPTCHAs"}
 API base: https://api.capsolver.com
 
 CRITICAL RULE: When ANY CAPTCHA appears (hCaptcha, reCAPTCHA, Turnstile -- regardless of what it looks like visually), you MUST:
@@ -417,9 +420,13 @@ If CapSolver genuinely failed (errorId > 0):
 4. All else fails -> Output RESULT:CAPTCHA."""
 
 
-def build_prompt(job: dict, tailored_resume: str,
-                 cover_letter: str | None = None,
-                 dry_run: bool = False) -> str:
+def build_prompt(
+    job: dict,
+    tailored_resume: str,
+    cover_letter: str | None = None,
+    dry_run: bool = False,
+    review_snapshot_path: str | None = None,
+) -> str:
     """Build the full instruction prompt for the apply agent.
 
     Loads the user profile and search config internally. All personal data
@@ -431,6 +438,7 @@ def build_prompt(job: dict, tailored_resume: str,
         tailored_resume: Plain-text content of the tailored resume.
         cover_letter: Optional plain-text cover letter content.
         dry_run: If True, tell the agent not to click Submit.
+        review_snapshot_path: Where a dry run must save the final review image.
 
     Returns:
         Complete prompt string for the AI agent.
@@ -500,6 +508,7 @@ def build_prompt(job: dict, tailored_resume: str,
 
     # SSO domains the agent cannot sign into (loaded from config/sites.yaml)
     from applypilot.config import load_blocked_sso
+
     blocked_sso = load_blocked_sso()
 
     # Preferred display name
@@ -509,17 +518,77 @@ def build_prompt(job: dict, tailored_resume: str,
 
     # Dry-run: override submit instruction
     if dry_run:
-        submit_instruction = "IMPORTANT: Do NOT click the final Submit/Apply button. Review the form, verify all fields, then output RESULT:APPLIED with a note that this was a dry run."
+        if not review_snapshot_path:
+            review_snapshot_path = str(config.APPLICATION_REVIEW_DIR / "latest_review.png")
+        review_path = Path(review_snapshot_path).resolve()
+        review_path.parent.mkdir(parents=True, exist_ok=True)
+        role_instruction = (
+            "You are a job application preparation agent. Fill the application "
+            "accurately and stop at the final review page. Never submit it."
+        )
+        mission_instruction = (
+            "Prepare a complete, accurate application for human review. Do not submit or send anything."
+        )
+        autonomy_instruction = (
+            "If something unexpected happens, navigate and diagnose it, but never "
+            "perform an irreversible action. The goal is to reach a completed final "
+            "review page and stop there."
+        )
+        email_instruction = (
+            "Do NOT send an email. Prepare the subject, body, and attachment "
+            "details on screen if possible, take the review screenshot, then "
+            "output RESULT:READY_FOR_REVIEW."
+        )
+        submit_instruction = (
+            "IMPORTANT: Do NOT click the final Submit/Apply/Send button. Review "
+            "EVERY field, correct errors, then call browser_take_screenshot with "
+            f'filename="{review_path}". Output one single-line '
+            'FORM_ANSWERS_JSON:{"Field label":"answer"} record containing all '
+            "non-sensitive visible answers. Never include passwords, verification "
+            "codes, government IDs, or authentication data. Then output "
+            "RESULT:READY_FOR_REVIEW."
+        )
+        after_submit_instruction = (
+            "11. STOP on the final review page. Confirm that the review screenshot "
+            "was saved. Never click Submit, Apply, Send, or any equivalent final action."
+        )
     else:
+        role_instruction = (
+            "You are an autonomous job application agent. Your ONE mission: get "
+            "this candidate an interview. You have all the information and tools. "
+            "Think strategically. Act decisively. Submit the application."
+        )
+        mission_instruction = (
+            "Submit a complete, accurate application. Use the profile and resume "
+            "as source data -- adapt to fit each form's format."
+        )
+        autonomy_instruction = (
+            "If something unexpected happens and these instructions don't cover it, "
+            "figure it out yourself. Navigate pages, read content, try buttons, and "
+            "explore the site while obeying every hard safety rule."
+        )
+        email_instruction = (
+            f'send_email with subject "Application for {job["title"]} -- '
+            f'{display_name}", body = 2-3 sentence pitch + contact info, attach '
+            f'resume PDF: ["{pdf_path}"]\n   - Output RESULT:APPLIED. Done.'
+        )
         submit_instruction = "BEFORE clicking Submit/Apply, take a snapshot and review EVERY field on the page. Verify all data matches the APPLICANT PROFILE and TAILORED RESUME -- name, email, phone, location, work auth, resume uploaded, cover letter if applicable. If anything is wrong or missing, fix it FIRST. Only click Submit after confirming everything is correct."
+        after_submit_instruction = (
+            "11. After submit: browser_snapshot. Run CAPTCHA DETECT -- submit buttons "
+            "often trigger invisible CAPTCHAs. If found, solve it (the form will "
+            "auto-submit once the token clears, or you may need to click Submit "
+            'again). Then check for new tabs (browser_tabs action: "list"). '
+            "Switch to newest, close old. Snapshot to confirm submission. Look for "
+            '"thank you" or "application received".'
+        )
 
-    prompt = f"""You are an autonomous job application agent. Your ONE mission: get this candidate an interview. You have all the information and tools. Think strategically. Act decisively. Submit the application.
+    prompt = f"""{role_instruction}
 
 == JOB ==
-URL: {job.get('application_url') or job['url']}
-Title: {job['title']}
-Company: {job.get('site', 'Unknown')}
-Fit Score: {job.get('fit_score', 'N/A')}/10
+URL: {job.get("application_url") or job["url"]}
+Title: {job["title"]}
+Company: {job.get("site", "Unknown")}
+Fit Score: {job.get("fit_score", "N/A")}/10
 
 == FILES ==
 Resume PDF (upload this): {pdf_path}
@@ -535,9 +604,9 @@ Cover Letter PDF (upload if asked): {cl_upload_path or "N/A"}
 {profile_summary}
 
 == YOUR MISSION ==
-Submit a complete, accurate application. Use the profile and resume as source data -- adapt to fit each form's format.
+{mission_instruction}
 
-If something unexpected happens and these instructions don't cover it, figure it out yourself. You are autonomous. Navigate pages, read content, try buttons, explore the site. The goal is always the same: submit the application. Do whatever it takes to reach that goal.
+{autonomy_instruction}
 
 {hard_rules}
 
@@ -562,13 +631,12 @@ If something unexpected happens and these instructions don't cover it, figure it
 2. browser_snapshot to read the page. Then run CAPTCHA DETECT (see CAPTCHA section). If a CAPTCHA is found, solve it before continuing.
 3. LOCATION CHECK. Read the page for location info. If not eligible, output RESULT and stop.
 4. Find and click the Apply button. If email-only (page says "email resume to X"):
-   - send_email with subject "Application for {job['title']} -- {display_name}", body = 2-3 sentence pitch + contact info, attach resume PDF: ["{pdf_path}"]
-   - Output RESULT:APPLIED. Done.
+   - {email_instruction}
    After clicking Apply: browser_snapshot. Run CAPTCHA DETECT -- many sites trigger CAPTCHAs right after the Apply click. If found, solve before continuing.
 5. Login wall?
-   5a. FIRST: check the URL. If you landed on {', '.join(blocked_sso)}, or any SSO/OAuth page -> STOP. Output RESULT:FAILED:sso_required. Do NOT try to sign in to Google/Microsoft/SSO.
+   5a. FIRST: check the URL. If you landed on {", ".join(blocked_sso)}, or any SSO/OAuth page -> STOP. Output RESULT:FAILED:sso_required. Do NOT try to sign in to Google/Microsoft/SSO.
    5b. Check for popups. Run browser_tabs action "list". If a new tab/window appeared (login popup), switch to it with browser_tabs action "select". Check the URL there too -- if it's SSO -> RESULT:FAILED:sso_required.
-   5c. Regular login form (employer's own site)? Try sign in: {personal['email']} / {personal.get('password', '')}
+   5c. Regular login form (employer's own site)? Try sign in: {personal["email"]} / {personal.get("password", "")}
    5d. After clicking Login/Sign-in: run CAPTCHA DETECT. Login pages frequently have invisible CAPTCHAs that silently block form submissions. If found, solve it then retry login.
    5e. Sign in failed? Try sign up with same email and password.
    5f. Need email verification? Use search_emails + read_email to get the code.
@@ -581,10 +649,11 @@ If something unexpected happens and these instructions don't cover it, figure it
    - Compare every other field to the APPLICANT PROFILE. Fix mismatches. Fill empty fields.
 9. Answer screening questions using the rules above.
 10. {submit_instruction}
-11. After submit: browser_snapshot. Run CAPTCHA DETECT -- submit buttons often trigger invisible CAPTCHAs. If found, solve it (the form will auto-submit once the token clears, or you may need to click Submit again). Then check for new tabs (browser_tabs action: "list"). Switch to newest, close old. Snapshot to confirm submission. Look for "thank you" or "application received".
+{after_submit_instruction}
 12. Output your result.
 
 == RESULT CODES (output EXACTLY one) ==
+RESULT:READY_FOR_REVIEW -- form completed but deliberately not submitted
 RESULT:APPLIED -- submitted successfully
 RESULT:EXPIRED -- job closed or no longer accepting applications
 RESULT:CAPTCHA -- blocked by unsolvable captcha
@@ -608,7 +677,7 @@ RESULT:FAILED:reason -- any other failure (brief reason)
 - Dropdown won't fill? browser_click to open it, then browser_click the option.
 - Checkbox won't check via fill_form? Use browser_click on it instead. Snapshot to verify.
 - Phone field with country prefix: just type digits {phone_digits}
-- Date fields: {datetime.now().strftime('%m/%d/%Y')}
+- Date fields: {datetime.now().strftime("%m/%d/%Y")}
 - Validation errors after submit? Take BOTH snapshot AND screenshot. Snapshot shows text errors, screenshot shows red-highlighted fields. Fix all, retry.
 - Honeypot fields (hidden, "leave blank"): skip them.
 - Format-sensitive fields: read the placeholder text, match it exactly.
@@ -622,3 +691,35 @@ RESULT:FAILED:reason -- any other failure (brief reason)
 Stop immediately. Output your RESULT code. Do not loop."""
 
     return prompt
+
+
+def build_submit_prompt(job: dict, submission_snapshot_path: str) -> str:
+    """Build the narrowly scoped second-phase prompt used after final approval.
+
+    The browser is expected to remain on the reviewed form. This prompt may
+    submit exactly that form, but it must not rebuild or materially edit it.
+    """
+    snapshot_path = Path(submission_snapshot_path).resolve()
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    return f"""You are completing a job application that the human has explicitly approved.
+
+== JOB ==
+URL: {job.get("application_url") or job["url"]}
+Title: {job["title"]}
+
+== STRICT SCOPE ==
+1. Use browser_tabs action \"list\" and select the tab containing the completed application.
+2. Take a browser_snapshot. The page must be the completed final review page or a page with the final Submit/Apply/Send button.
+3. Do not change answers, upload different files, create an account, navigate to another application, or send email.
+4. If the completed reviewed form is no longer present, output RESULT:FAILED:review_session_lost. Do not reconstruct or refill it.
+5. Click the final Submit/Apply/Send action exactly once.
+6. Wait for the result. Take a browser_snapshot and call browser_take_screenshot with filename="{snapshot_path}".
+7. Output RESULT:APPLIED only if the page clearly says the application was received/submitted or shows a confirmation number.
+8. Otherwise output RESULT:FAILED:submission_unverified. Never infer success from a button click alone.
+
+== RESULT CODES (output EXACTLY one) ==
+RESULT:APPLIED
+RESULT:FAILED:review_session_lost
+RESULT:FAILED:submission_unverified
+RESULT:FAILED:reason
+"""

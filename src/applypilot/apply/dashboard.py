@@ -7,7 +7,7 @@ in a terminal dashboard using the Rich library.
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -32,6 +32,7 @@ class WorkerState:
     actions: int = 0
     last_action: str = ""
     jobs_applied: int = 0
+    jobs_reviewed: int = 0
     jobs_failed: int = 0
     jobs_done: int = 0
     total_cost: float = 0.0
@@ -48,6 +49,7 @@ MAX_EVENTS = 8
 # ---------------------------------------------------------------------------
 # State mutation helpers
 # ---------------------------------------------------------------------------
+
 
 def init_worker(worker_id: int = 0) -> None:
     """Register the worker in the dashboard state."""
@@ -102,6 +104,7 @@ _STATUS_STYLES: dict[str, str] = {
     "expired": "dim red",
     "captcha": "magenta",
     "login_issue": "red",
+    "review": "bold cyan",
     "done": "bold",
 }
 
@@ -120,6 +123,7 @@ def render_dashboard() -> Table:
     table.add_column("Acts", width=5, justify="right")
     table.add_column("Last Action", min_width=20, max_width=35, no_wrap=True)
     table.add_column("OK", width=4, justify="right", style="green")
+    table.add_column("Review", width=6, justify="right", style="cyan")
     table.add_column("Fail", width=4, justify="right", style="red")
     table.add_column("Cost", width=8, justify="right")
 
@@ -127,6 +131,7 @@ def render_dashboard() -> Table:
         states = sorted(_worker_states.values(), key=lambda s: s.worker_id)
 
     total_applied = 0
+    total_reviewed = 0
     total_failed = 0
     total_cost = 0.0
 
@@ -148,18 +153,28 @@ def render_dashboard() -> Table:
             str(s.actions) if s.actions else "",
             s.last_action[:35] if s.last_action else "",
             str(s.jobs_applied),
+            str(s.jobs_reviewed),
             str(s.jobs_failed),
             f"${s.total_cost:.3f}" if s.total_cost else "",
         )
         total_applied += s.jobs_applied
+        total_reviewed += s.jobs_reviewed
         total_failed += s.jobs_failed
         total_cost += s.total_cost
 
     # Totals row
     table.add_section()
     table.add_row(
-        "", "", "", "", "", "TOTAL",
-        str(total_applied), str(total_failed), f"${total_cost:.3f}",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "TOTAL",
+        str(total_applied),
+        str(total_reviewed),
+        str(total_failed),
+        f"${total_cost:.3f}",
         style="bold",
     )
 
@@ -194,10 +209,11 @@ def get_totals() -> dict[str, int | float]:
     """Compute aggregate totals across all workers.
 
     Returns:
-        Dict with keys: applied, failed, cost.
+        Dict with keys: applied, reviewed, failed, cost.
     """
     with _lock:
         applied = sum(s.jobs_applied for s in _worker_states.values())
+        reviewed = sum(s.jobs_reviewed for s in _worker_states.values())
         failed = sum(s.jobs_failed for s in _worker_states.values())
         cost = sum(s.total_cost for s in _worker_states.values())
-    return {"applied": applied, "failed": failed, "cost": cost}
+    return {"applied": applied, "reviewed": reviewed, "failed": failed, "cost": cost}
