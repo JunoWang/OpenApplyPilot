@@ -12,6 +12,7 @@ import os
 import platform
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import threading
@@ -442,6 +443,69 @@ def reset_failed() -> int:
 # ---------------------------------------------------------------------------
 
 
+def _archive_snapshot(source: Path, destination: str | None) -> bool:
+    """Copy a worker screenshot into durable application evidence storage."""
+    if not destination or not source.exists():
+        return False
+    target = Path(destination)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+    target.chmod(0o600)
+    return True
+
+
+def _validate_prepared_form(port: int) -> tuple[bool, list[str]]:
+    """Read-only DOM check for empty required fields and a missing resume."""
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+            pages = [page for context in browser.contexts for page in context.pages]
+            if not pages:
+                return False, ["application_page"]
+            page = pages[-1]
+            result = page.evaluate(
+                """() => {
+                    const visible = (el) => Boolean(
+                      el.offsetWidth || el.offsetHeight || el.getClientRects().length
+                    );
+                    const labelFor = (el) => {
+                      if (el.labels && el.labels.length) return el.labels[0].innerText.trim();
+                      const container = el.closest('label, [class*="field"], [class*="Field"]');
+                      const label = container && container.querySelector('label');
+                      return label ? label.innerText.trim() : (el.getAttribute('aria-label') || el.name || el.type);
+                    };
+                    const missing = [];
+                    for (const el of document.querySelectorAll('input, textarea, select')) {
+                      if (el.disabled || el.type === 'hidden' || el.type === 'file' || !visible(el)) continue;
+                      const label = labelFor(el);
+                      const required = el.required || el.getAttribute('aria-required') === 'true' || label.includes('*');
+                      if (!required) continue;
+                      if ((el.type === 'checkbox' || el.type === 'radio')) {
+                        const group = el.name
+                          ? Array.from(document.querySelectorAll(`input[name="${CSS.escape(el.name)}"]`))
+                          : [el];
+                        if (!group.some((item) => item.checked)) missing.push(label);
+                      } else if (!String(el.value || '').trim()) {
+                        missing.push(label);
+                      }
+                    }
+                    const pageText = document.body.innerText || '';
+                    const resumeRequired = /Resume\\s*\\*/i.test(pageText);
+                    const resumeUploaded = Array.from(document.querySelectorAll('input[type="file"]'))
+                      .some((el) => el.files && el.files.length > 0);
+                    if (resumeRequired && !resumeUploaded) missing.push('Resume');
+                    return Array.from(new Set(missing));
+                }"""
+            )
+            missing = [str(label)[:100] for label in result] if isinstance(result, list) else ["form_validation"]
+            return not missing, missing
+    except Exception:
+        logger.exception("Could not validate prepared application form over CDP")
+        return False, ["form_validation_unavailable"]
+
+
 def run_job(
     job: dict,
     port: int,
@@ -468,9 +532,14 @@ def run_job(
     if phase not in {"prepare", "submit"}:
         raise ValueError(f"Unsupported apply phase: {phase}")
 
+    # Claude runs in restricted mode and Playwright file operations are scoped
+    # to this directory. Put upload inputs and screenshot outputs here first,
+    # then archive evidence to the application review directory.
+    worker_dir = reset_worker_dir(worker_id)
     snapshot_name = application_id or f"worker-{worker_id}"
     review_snapshot_path = None
     submission_snapshot_path = None
+    agent_snapshot_path = worker_dir / f"{snapshot_name}.png"
     if phase == "prepare":
         review_snapshot_path = str(config.APPLICATION_REVIEW_DIR / f"{snapshot_name}.png")
         # The preparation phase is always non-submitting. The final action is
@@ -479,13 +548,15 @@ def run_job(
             job=job,
             tailored_resume=resume_text,
             dry_run=True,
-            review_snapshot_path=review_snapshot_path,
+            review_snapshot_path=str(agent_snapshot_path),
+            upload_dir=worker_dir,
         )
     else:
         submission_snapshot_path = str(config.APPLICATION_REVIEW_DIR / f"{snapshot_name}_submitted.png")
+        agent_snapshot_path = worker_dir / f"{snapshot_name}_submitted.png"
         agent_prompt = prompt_mod.build_submit_prompt(
             job,
-            submission_snapshot_path,
+            str(agent_snapshot_path),
         )
 
     # Write per-worker MCP config
@@ -506,8 +577,6 @@ def run_job(
     env = os.environ.copy()
     env.pop("CLAUDECODE", None)
     env.pop("CLAUDE_CODE_ENTRYPOINT", None)
-
-    worker_dir = reset_worker_dir(worker_id)
 
     update_state(
         worker_id,
@@ -627,6 +696,9 @@ def run_job(
                 agent_log_path=str(job_log),
             )
 
+        final_snapshot_path = review_snapshot_path or submission_snapshot_path
+        _archive_snapshot(agent_snapshot_path, final_snapshot_path)
+
         if stats:
             cost = stats.get("cost_usd", 0)
             ws = get_state(worker_id)
@@ -644,6 +716,16 @@ def run_job(
                     None,
                     form_answers=form_answers,
                 )
+            if _resume_upload_failed(form_answers):
+                add_event(f"[W{worker_id}] FAILED ({elapsed}s): resume_not_uploaded")
+                update_state(worker_id, status="failed", last_action="FAILED: resume_not_uploaded")
+                return "failed:resume_not_uploaded", duration_ms
+            valid_form, missing_fields = _validate_prepared_form(port)
+            if not valid_form:
+                reason = "required_fields_missing:" + ",".join(missing_fields[:5])
+                add_event(f"[W{worker_id}] FAILED ({elapsed}s): {reason[:50]}")
+                update_state(worker_id, status="failed", last_action=f"FAILED: {reason[:25]}")
+                return f"failed:{reason}", duration_ms
             add_event(f"[W{worker_id}] READY FOR REVIEW ({elapsed}s): {job['title'][:30]}")
             update_state(worker_id, status="review", last_action=f"REVIEW ({elapsed}s)")
             return "ready_for_review", duration_ms
@@ -705,17 +787,39 @@ def run_job(
 def _extract_form_answers(output: str) -> dict | None:
     """Parse the agent's one-line, non-sensitive form answer record."""
     marker = "FORM_ANSWERS_JSON:"
-    for line in output.splitlines():
-        if marker not in line:
+    offset = 0
+    while True:
+        marker_index = output.find(marker, offset)
+        if marker_index < 0:
+            return None
+        raw = output[marker_index + len(marker):].lstrip(" \t\r\n`")
+        if raw.startswith("json"):
+            raw = raw[4:].lstrip(" \t\r\n")
+        object_index = raw.find("{")
+        if object_index < 0:
+            offset = marker_index + len(marker)
             continue
-        raw = line.split(marker, 1)[1].strip().strip("`")
         try:
-            value = json.loads(raw)
+            value, _ = json.JSONDecoder().raw_decode(raw[object_index:])
         except json.JSONDecodeError:
+            offset = marker_index + len(marker)
             continue
         if isinstance(value, dict):
             return value
-    return None
+        offset = marker_index + len(marker)
+
+
+def _resume_upload_failed(form_answers: dict | None) -> bool:
+    """Fail closed when the agent explicitly reports a missing resume."""
+    if not form_answers:
+        return False
+    for field, answer in form_answers.items():
+        if "resume" not in str(field).casefold():
+            continue
+        normalized = str(answer).casefold()
+        if any(term in normalized for term in ("not uploaded", "missing", "failed", "limitation")):
+            return True
+    return False
 
 
 def _terminal_approval(payload: Mapping[str, object]) -> bool:

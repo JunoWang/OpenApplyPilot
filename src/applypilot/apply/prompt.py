@@ -76,16 +76,19 @@ def _build_profile_summary(profile: dict) -> str:
     # Availability
     lines.append(f"Available: {avail.get('earliest_start_date', 'Immediately')}")
 
-    # Standard responses
-    lines.extend(
-        [
-            "Age 18+: Yes",
-            "Background Check: Yes",
-            "Felony: No",
-            "Previously Worked Here: No",
-            "How Heard: Online Job Board",
-        ]
-    )
+    # Optional application facts are included only when explicitly configured.
+    application_facts = p.get("application_facts", {})
+    fact_labels = {
+        "age_18_or_older": "Age 18+",
+        "consent_to_background_check": "Background Check Consent",
+        "criminal_history": "Criminal History",
+        "worked_at_startup": "Worked at Startup",
+        "currently_enrolled": "Currently Enrolled",
+        "pronouns": "Pronouns",
+    }
+    for key, label in fact_labels.items():
+        if key in application_facts and application_facts[key] not in (None, ""):
+            lines.append(f"{label}: {application_facts[key]}")
 
     # EEO
     lines.append(f"Gender: {eeo.get('gender', 'Decline to self-identify')}")
@@ -201,6 +204,7 @@ Hard facts -> answer truthfully from the profile. No guessing. This includes:
   - Work authorization: {work_auth.get("legally_authorized_to_work", "see profile")}
   - Citizenship, clearance, licenses, certifications: answer from profile only
   - Criminal/background: answer from profile only
+  - Pronouns and startup experience: answer only if explicitly present under application_facts; otherwise leave optional fields blank, or stop and report a required unknown
 
 Skills and tools -> be confident. This candidate is a {target_role} with {years} years experience. If the question asks "Do you have experience with [tool]?" and it's in the same domain (DevOps, backend, ML, cloud, automation), answer YES. Software engineers learn tools fast. Don't sell short.
 
@@ -448,6 +452,7 @@ def build_prompt(
     cover_letter: str | None = None,
     dry_run: bool = False,
     review_snapshot_path: str | None = None,
+    upload_dir: str | Path | None = None,
 ) -> str:
     """Build the full instruction prompt for the apply agent.
 
@@ -481,7 +486,7 @@ def build_prompt(
     # Copy to a clean filename for upload (recruiters see the filename)
     full_name = personal["full_name"]
     name_slug = full_name.replace(" ", "_")
-    dest_dir = config.APPLY_WORKER_DIR / "current"
+    dest_dir = Path(upload_dir) if upload_dir is not None else config.APPLY_WORKER_DIR / "current"
     dest_dir.mkdir(parents=True, exist_ok=True)
     upload_pdf = dest_dir / f"{name_slug}_Resume.pdf"
     shutil.copy(str(src_pdf), str(upload_pdf))
@@ -568,7 +573,9 @@ def build_prompt(
             'FORM_ANSWERS_JSON:{"Field label":"answer"} record containing all '
             "non-sensitive visible answers. Never include passwords, verification "
             "codes, government IDs, or authentication data. Then output "
-            "RESULT:READY_FOR_REVIEW."
+            "RESULT:READY_FOR_REVIEW. If the resume was not uploaded or the "
+            "review screenshot was not saved, output RESULT:FAILED with that "
+            "specific reason instead."
         )
         after_submit_instruction = (
             "11. STOP on the final review page. Confirm that the review screenshot "
@@ -664,12 +671,14 @@ Cover Letter PDF (upload if asked): {cl_upload_path or "N/A"}
    5f. Need email verification? Use search_emails + read_email to get the code.
    5g. After login, run browser_tabs action "list" again. Switch back to the application tab if needed.
    5h. All failed? Output RESULT:FAILED:login_issue. Do not loop.
-6. Upload resume. ALWAYS upload fresh -- delete any existing resume first, then browser_file_upload with the PDF path above. This is the tailored resume for THIS job. Non-negotiable.
+6. Upload resume. ALWAYS upload fresh -- delete any existing resume first, then browser_file_upload with the PDF path above. This is the tailored resume for THIS job. Non-negotiable. Never report READY_FOR_REVIEW unless the page visibly confirms the resume is attached.
 7. Upload cover letter if there's a field for it. Text field -> paste the cover letter text. File upload -> use the cover letter PDF path.
 8. Check ALL pre-filled fields. ATS systems parse your resume and auto-fill -- it's often WRONG.
    - "Current Job Title" or "Most Recent Title" -> use the title from the TAILORED RESUME summary, NOT whatever the parser guessed.
    - Compare every other field to the APPLICANT PROFILE. Fix mismatches. Fill empty fields.
+   - Clear optional pre-filled fields that are not supported by the profile (including pronouns). Never keep a guessed value.
 9. Answer screening questions using the rules above.
+9a. For a required Location autocomplete, type the profile location, click an offered dropdown option, then verify the input no longer shows a placeholder. Typed text alone is not a selected location.
 10. {submit_instruction}
 {after_submit_instruction}
 12. Output your result.

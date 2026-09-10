@@ -103,6 +103,8 @@ def test_dry_run_prompt_stops_at_review_and_uses_distinct_result(tmp_path, monke
     assert "Willing to Relocate: Yes" in value
     assert "willing to relocate: Yes" in value
     assert "Do not reject solely because the city differs" in value
+    assert "Pronouns and startup experience" in value
+    assert "Age 18+: Yes" not in value
 
 
 def test_location_prompt_defaults_to_no_relocation_for_legacy_profiles() -> None:
@@ -160,6 +162,36 @@ RESULT:READY_FOR_REVIEW
         "Authorized": "Yes",
         "Salary": "120000 CAD",
     }
+
+
+def test_form_answer_record_parser_accepts_fenced_multiline_json() -> None:
+    output = '''
+FORM_ANSWERS_JSON:
+```json
+{
+  "Authorized": "Yes",
+  "Resume": "Not uploaded (file limitation)"
+}
+```
+RESULT:READY_FOR_REVIEW
+'''
+
+    answers = launcher._extract_form_answers(output)
+
+    assert answers == {"Authorized": "Yes", "Resume": "Not uploaded (file limitation)"}
+    assert launcher._resume_upload_failed(answers) is True
+    assert launcher._resume_upload_failed({"Resume": "Congying_Wang_Resume.pdf"}) is False
+
+
+def test_archive_snapshot_copies_worker_evidence_with_private_permissions(tmp_path) -> None:
+    source = tmp_path / "worker" / "review.png"
+    destination = tmp_path / "reviews" / "application.png"
+    source.parent.mkdir()
+    source.write_bytes(b"png evidence")
+
+    assert launcher._archive_snapshot(source, str(destination)) is True
+    assert destination.read_bytes() == b"png evidence"
+    assert destination.stat().st_mode & 0o777 == 0o600
 
 
 def test_claude_command_is_restricted_and_cannot_send_email(tmp_path) -> None:

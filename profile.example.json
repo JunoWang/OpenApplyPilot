@@ -28,6 +28,11 @@
     "available_for_full_time": "Yes",
     "available_for_contract": "No"
   },
+  "application_facts": {
+    "pronouns": "",
+    "currently_enrolled": true,
+    "worked_at_startup": false
+  },
   "compensation": {
     "salary_expectation": "85000",
     "salary_currency": "USD",

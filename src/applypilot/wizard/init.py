@@ -198,6 +198,15 @@ def _setup_profile() -> dict:
         "earliest_start_date": Prompt.ask("Earliest start date", default="Immediately"),
     }
 
+    # -- Reusable application facts --
+    console.print("\n[bold cyan]Reusable Application Facts[/bold cyan]")
+    console.print("[dim]Unknown optional answers stay blank; the browser agent will never guess them.[/dim]")
+    profile["application_facts"] = {
+        "pronouns": Prompt.ask("Pronouns (optional)", default=""),
+        "currently_enrolled": Confirm.ask("Are you currently enrolled in a degree program?", default=False),
+        "worked_at_startup": Confirm.ask("Have you worked at a startup?", default=False),
+    }
+
     # Save
     PROFILE_PATH.write_text(json.dumps(profile, indent=2, ensure_ascii=False), encoding="utf-8")
     console.print(f"\n[green]Profile saved to {PROFILE_PATH}[/green]")
