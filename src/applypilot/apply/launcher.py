@@ -502,7 +502,9 @@ def _finalize_prepared_form(
                     for (const group of document.querySelectorAll('.ashby-application-form-input-yesno')) {
                       if (!group.querySelector('button[aria-pressed="true"]')) {
                         const field = group.closest('.ashby-application-form-field-entry');
-                        missing.push((field?.innerText || 'Yes/No').trim().split('\n')[0]);
+                        const fieldText = (field?.innerText || 'Yes/No').trim();
+                        const newline = fieldText.indexOf(String.fromCharCode(10));
+                        missing.push(newline >= 0 ? fieldText.slice(0, newline) : fieldText);
                       }
                     }
                     const pageText = document.body.innerText || '';
