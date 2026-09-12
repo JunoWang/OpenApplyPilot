@@ -31,7 +31,11 @@
   "application_facts": {
     "pronouns": "",
     "currently_enrolled": true,
-    "worked_at_startup": false
+    "worked_at_startup": false,
+    "open_to_onsite": true,
+    "college_degree": true,
+    "institutions": "University Name",
+    "major_minor": "Computer Science"
   },
   "compensation": {
     "salary_expectation": "85000",

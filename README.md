@@ -182,6 +182,8 @@ Writes a targeted cover letter per job referencing the specific company, role, a
 ### Auto-Apply
 Claude Code launches a Chrome instance, navigates to the selected application page, fills personal information and work history, uploads the tailored resume and cover letter, and answers screening questions. LangGraph pauses before browser preparation for material approval and again on the completed form before the separate submit phase. Review screenshots, form answers, agent logs, approval times, and submission evidence remain under `~/.openapplypilot/`.
 
+For supported ATS forms, deterministic adapters repair and verify the final browser state after agent navigation. The Ashby adapter fills stable labeled fields, selects autocomplete locations, uploads the approved resume, applies profile-backed Yes/No answers, clears unsupported optional values, and records the browser's actual field state. Unknown required answers fail closed instead of being guessed.
+
 Stage 6A requires `--url`, one visible worker, and no continuous mode. A dry run ends at `ready_for_review`; it can never set the job to applied or consume the production retry budget. LangSmith tracing is disabled unless `OPENAPPLYPILOT_LANGSMITH_OPT_IN=true` is explicitly configured.
 
 The Playwright MCP server is configured automatically at runtime per worker. No manual MCP setup needed.

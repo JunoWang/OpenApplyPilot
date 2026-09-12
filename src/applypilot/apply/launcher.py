@@ -454,17 +454,25 @@ def _archive_snapshot(source: Path, destination: str | None) -> bool:
     return True
 
 
-def _validate_prepared_form(port: int) -> tuple[bool, list[str]]:
-    """Read-only DOM check for empty required fields and a missing resume."""
+def _finalize_prepared_form(
+    port: int,
+    profile: dict,
+    resume_path: Path,
+    screenshot_path: Path,
+) -> tuple[bool, list[str], dict[str, str], str]:
+    """Repair supported ATS forms, validate required fields, and save evidence."""
     try:
         from playwright.sync_api import sync_playwright
+
+        from applypilot.apply.adapters.ashby import repair_and_collect
 
         with sync_playwright() as playwright:
             browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
             pages = [page for context in browser.contexts for page in context.pages]
             if not pages:
-                return False, ["application_page"]
+                return False, ["application_page"], {}, ""
             page = pages[-1]
+            adapter_result = repair_and_collect(page, profile, resume_path)
             result = page.evaluate(
                 """() => {
                     const visible = (el) => Boolean(
@@ -491,6 +499,12 @@ def _validate_prepared_form(port: int) -> tuple[bool, list[str]]:
                         missing.push(label);
                       }
                     }
+                    for (const group of document.querySelectorAll('.ashby-application-form-input-yesno')) {
+                      if (!group.querySelector('button[aria-pressed="true"]')) {
+                        const field = group.closest('.ashby-application-form-field-entry');
+                        missing.push((field?.innerText || 'Yes/No').trim().split('\n')[0]);
+                      }
+                    }
                     const pageText = document.body.innerText || '';
                     const resumeRequired = /Resume\\s*\\*/i.test(pageText);
                     const resumeUploaded = Array.from(document.querySelectorAll('input[type="file"]'))
@@ -500,10 +514,14 @@ def _validate_prepared_form(port: int) -> tuple[bool, list[str]]:
                 }"""
             )
             missing = [str(label)[:100] for label in result] if isinstance(result, list) else ["form_validation"]
-            return not missing, missing
+            errors = adapter_result.errors + missing
+            screenshot_path.parent.mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(screenshot_path), full_page=True)
+            learned_url = page.url if adapter_result.handled else ""
+            return not errors, errors, adapter_result.answers, learned_url
     except Exception:
         logger.exception("Could not validate prepared application form over CDP")
-        return False, ["form_validation_unavailable"]
+        return False, ["form_validation_unavailable"], {}, ""
 
 
 def run_job(
@@ -710,17 +728,33 @@ def run_job(
 
         if phase == "prepare" and "RESULT:READY_FOR_REVIEW" in output:
             form_answers = _extract_form_answers(output)
-            if application_id and form_answers is not None:
-                update_application_record(
-                    application_id,
-                    None,
-                    form_answers=form_answers,
-                )
             if _resume_upload_failed(form_answers):
                 add_event(f"[W{worker_id}] FAILED ({elapsed}s): resume_not_uploaded")
                 update_state(worker_id, status="failed", last_action="FAILED: resume_not_uploaded")
                 return "failed:resume_not_uploaded", duration_ms
-            valid_form, missing_fields = _validate_prepared_form(port)
+            profile = config.load_profile()
+            applicant_name = profile.get("personal", {}).get("full_name", "Candidate")
+            resume_upload_path = worker_dir / f"{str(applicant_name).replace(' ', '_')}_Resume.pdf"
+            valid_form, missing_fields, verified_answers, verified_application_url = _finalize_prepared_form(
+                port,
+                profile,
+                resume_upload_path,
+                agent_snapshot_path,
+            )
+            _archive_snapshot(agent_snapshot_path, review_snapshot_path)
+            if application_id and (verified_answers or form_answers is not None):
+                update_application_record(
+                    application_id,
+                    None,
+                    form_answers=verified_answers or form_answers,
+                )
+            if verified_application_url and verified_application_url != job.get("application_url"):
+                conn = get_connection()
+                conn.execute(
+                    "UPDATE jobs SET application_url = ?, updated_at = ? WHERE url = ?",
+                    (verified_application_url, datetime.now(timezone.utc).isoformat(), job["url"]),
+                )
+                conn.commit()
             if not valid_form:
                 reason = "required_fields_missing:" + ",".join(missing_fields[:5])
                 add_event(f"[W{worker_id}] FAILED ({elapsed}s): {reason[:50]}")

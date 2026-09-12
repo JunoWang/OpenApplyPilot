@@ -205,6 +205,10 @@ def _setup_profile() -> dict:
         "pronouns": Prompt.ask("Pronouns (optional)", default=""),
         "currently_enrolled": Confirm.ask("Are you currently enrolled in a degree program?", default=False),
         "worked_at_startup": Confirm.ask("Have you worked at a startup?", default=False),
+        "open_to_onsite": Confirm.ask("Are you open to working onsite for a suitable role?", default=False),
+        "college_degree": Confirm.ask("Do you have a college degree?", default=True),
+        "institutions": Prompt.ask("Institution(s) graduated from", default=""),
+        "major_minor": Prompt.ask("Major/minor", default=""),
     }
 
     # Save
