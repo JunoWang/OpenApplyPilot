@@ -1,4 +1,6 @@
-from applypilot.apply.adapters.ashby import build_answer_plan, is_ashby_page
+from unittest.mock import MagicMock
+
+from applypilot.apply.adapters.ashby import _choose_yes_no, build_answer_plan, is_ashby_page
 
 
 def test_ashby_answer_plan_uses_only_profile_facts() -> None:
@@ -37,3 +39,33 @@ def test_ashby_answer_plan_uses_only_profile_facts() -> None:
 def test_ashby_page_detection_is_exact() -> None:
     assert is_ashby_page("https://jobs.ashbyhq.com/example/123") is True
     assert is_ashby_page("https://evil.example/?next=jobs.ashbyhq.com") is False
+
+
+def _yes_no_page(*, pressed_states: list[str]) -> tuple[MagicMock, MagicMock]:
+    page = MagicMock()
+    container = page.locator.return_value.filter.return_value
+    container.count.return_value = 1
+    button = container.first.get_by_role.return_value
+    button.count.return_value = 1
+    button.first.get_attribute.side_effect = pressed_states
+    return page, button.first
+
+
+def test_choose_yes_no_leaves_matching_selection_untouched() -> None:
+    page, button = _yes_no_page(pressed_states=["true", "true"])
+    errors: list[str] = []
+
+    _choose_yes_no(page, "worked at a startup", True, errors)
+
+    button.click.assert_not_called()
+    assert errors == []
+
+
+def test_choose_yes_no_clicks_only_when_selection_is_missing() -> None:
+    page, button = _yes_no_page(pressed_states=["false", "true"])
+    errors: list[str] = []
+
+    _choose_yes_no(page, "worked at a startup", True, errors)
+
+    button.click.assert_called_once_with()
+    assert errors == []

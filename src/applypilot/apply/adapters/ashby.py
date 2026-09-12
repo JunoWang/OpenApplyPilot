@@ -86,7 +86,11 @@ def _choose_yes_no(page, question: str, value: object, errors: list[str]) -> Non
     if not button.count():
         errors.append(f"missing_control:{question}")
         return
-    button.first.click()
+    # Ashby's segmented Yes/No controls are toggle buttons. Clicking an
+    # already-selected answer clears it, so this repair step must be
+    # idempotent when the browser agent has already chosen the right value.
+    if button.first.get_attribute("aria-pressed") != "true":
+        button.first.click()
     if button.first.get_attribute("aria-pressed") != "true":
         errors.append(f"selection_not_applied:{question}")
 
