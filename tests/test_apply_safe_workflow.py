@@ -759,4 +759,39 @@ def test_existing_application_table_migrates_stage6_columns(tmp_path) -> None:
     columns = {row[1] for row in migrated.execute("PRAGMA table_info(applications)").fetchall()}
 
     assert set(database._APPLICATION_COLUMNS).issubset(columns)
-    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == database.SCHEMA_VERSION
+
+
+def test_worker_passes_review_center_approval_callback_to_safe_workflow(tmp_path, monkeypatch) -> None:
+    callback = lambda _payload: True
+    captured: dict = {}
+    job = {
+        "url": "https://example.test/job",
+        "title": "Engineer",
+        "company": "Example Co",
+    }
+    monkeypatch.setattr(launcher, "reacquire_application", lambda *_args, **_kwargs: job)
+    monkeypatch.setattr(launcher, "launch_chrome", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(launcher, "cleanup_worker", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(launcher, "release_lock", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(launcher, "add_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(launcher, "update_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(launcher, "get_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(launcher, "update_application_record", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(launcher.config, "APPLICATION_REVIEW_DIR", tmp_path)
+
+    def fake_workflow(*_args, **kwargs):
+        captured.update(kwargs)
+        return "ready_for_review", 1
+
+    monkeypatch.setattr(launcher, "run_safe_workflow", fake_workflow)
+    launcher._stop_event.clear()
+
+    result = launcher.worker_loop(
+        limit=1,
+        resume_application_id="application-id",
+        approval_callback=callback,
+    )
+
+    assert result == (0, 0)
+    assert captured["approval_callback"] is callback

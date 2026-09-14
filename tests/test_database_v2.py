@@ -1,6 +1,8 @@
 import json
 import stat
 
+import pytest
+
 from applypilot import database
 
 
@@ -32,6 +34,7 @@ def test_v2_schema_and_jd_snapshot_history(tmp_path) -> None:
         "pipeline_runs",
         "stage_events",
         "applications",
+        "application_reviews",
         "system_metadata",
         "schema_migrations",
     }.issubset(table_names)
@@ -126,3 +129,46 @@ def test_pipeline_run_events_and_application_stats(tmp_path) -> None:
     assert applications[0]["status"] == "materials_approved"
     assert applications[0]["material_approved_at"] is not None
     assert applications[0]["form_answers"] == {"authorized": True}
+
+
+def test_application_review_decisions_are_durable_and_update_queue_state(tmp_path) -> None:
+    conn = database.init_db(tmp_path / "openapplypilot.db")
+    _insert_job(conn)
+    application_id = database.create_application_record("https://example.test/job", conn=conn)
+    database.update_application_record(application_id, "ready_for_review", conn=conn)
+
+    review_id = database.record_application_review(
+        application_id,
+        "approved",
+        notes="Answers and documents checked",
+        material_fingerprint="sha256:test",
+        conn=conn,
+    )
+
+    application = database.get_application_record(application_id, conn=conn)
+    reviews = database.list_application_reviews(application_id, conn=conn)
+    assert application["status"] == "review_approved"
+    assert reviews == [
+        {
+            "id": review_id,
+            "application_id": application_id,
+            "decision": "approved",
+            "notes": "Answers and documents checked",
+            "material_fingerprint": "sha256:test",
+            "created_at": reviews[0]["created_at"],
+        }
+    ]
+    query_plan = conn.execute(
+        "EXPLAIN QUERY PLAN SELECT * FROM application_reviews WHERE application_id = ? ORDER BY created_at DESC",
+        (application_id,),
+    ).fetchall()
+    assert any("idx_application_reviews_application" in row[3] for row in query_plan)
+
+
+def test_application_review_rejects_invalid_state_transition(tmp_path) -> None:
+    conn = database.init_db(tmp_path / "openapplypilot.db")
+    _insert_job(conn)
+    application_id = database.create_application_record("https://example.test/job", conn=conn)
+
+    with pytest.raises(ValueError, match="while application is draft"):
+        database.record_application_review(application_id, "rejected", conn=conn)

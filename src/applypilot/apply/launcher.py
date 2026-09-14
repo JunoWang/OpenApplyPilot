@@ -11,8 +11,8 @@ import logging
 import os
 import platform
 import re
-import signal
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -1124,6 +1124,7 @@ def worker_loop(
     model: str = "sonnet",
     dry_run: bool = False,
     resume_application_id: str | None = None,
+    approval_callback: ApprovalCallback | None = None,
 ) -> tuple[int, int]:
     """Run jobs sequentially until limit is reached or queue is empty.
 
@@ -1136,6 +1137,7 @@ def worker_loop(
         model: Claude model name.
         dry_run: Don't click Submit.
         resume_application_id: Continue a workflow paused at an approval gate.
+        approval_callback: Optional approval source for the two safety gates.
 
     Returns:
         Tuple of (applied_count, failed_count).
@@ -1194,6 +1196,7 @@ def worker_loop(
                 model=model,
                 application_id=application_id,
                 allow_submission=not dry_run,
+                approval_callback=approval_callback,
                 resume=bool(resume_application_id),
             )
 
@@ -1289,6 +1292,7 @@ def main(
     poll_interval: int = 60,
     workers: int = 1,
     resume_application_id: str | None = None,
+    approval_callback: ApprovalCallback | None = None,
 ) -> None:
     """Launch the apply pipeline.
 
@@ -1303,6 +1307,7 @@ def main(
         poll_interval: Seconds between DB polls when queue is empty.
         workers: Number of parallel workers (default 1).
         resume_application_id: Continue a workflow paused at an approval gate.
+        approval_callback: Optional approval source for the two safety gates.
     """
     global POLL_INTERVAL
     POLL_INTERVAL = poll_interval
@@ -1375,6 +1380,7 @@ def main(
                     model=model,
                     dry_run=dry_run,
                     resume_application_id=resume_application_id,
+                    approval_callback=approval_callback,
                 )
             else:
                 # Multi-worker — distribute limit across workers
@@ -1397,6 +1403,7 @@ def main(
                             model=model,
                             dry_run=dry_run,
                             resume_application_id=resume_application_id,
+                            approval_callback=approval_callback,
                         ): i
                         for i in range(workers)
                     }

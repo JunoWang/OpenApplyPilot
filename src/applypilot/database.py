@@ -19,7 +19,7 @@ from applypilot.config import DB_PATH
 # (required for SQLite thread safety with parallel workers)
 _local = threading.local()
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def _utc_now() -> str:
@@ -320,6 +320,17 @@ def _create_v2_tables(conn: sqlite3.Connection) -> None:
                 ON DELETE SET NULL
         );
 
+        CREATE TABLE IF NOT EXISTS application_reviews (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            application_id       TEXT NOT NULL,
+            decision             TEXT NOT NULL,
+            notes                TEXT,
+            material_fingerprint TEXT,
+            created_at           TEXT NOT NULL,
+            FOREIGN KEY (application_id) REFERENCES applications(id)
+                ON DELETE CASCADE
+        );
+
         CREATE INDEX IF NOT EXISTS idx_jd_snapshots_job_current
             ON jd_snapshots(job_url, is_current, captured_at DESC);
         CREATE INDEX IF NOT EXISTS idx_pipeline_runs_started
@@ -332,7 +343,10 @@ def _create_v2_tables(conn: sqlite3.Connection) -> None:
             ON applications(job_url, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_applications_status
             ON applications(status, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_application_reviews_application
+            ON application_reviews(application_id, created_at DESC);
     """)
+    conn.execute("PRAGMA optimize")
 
 
 _APPLICATION_COLUMNS: dict[str, str] = {
@@ -530,10 +544,19 @@ _APPLICATION_STATUSES = {
     "draft",
     "materials_approved",
     "ready_for_review",
+    "review_approved",
+    "changes_requested",
     "approved",
     "submitted",
     "failed",
     "withdrawn",
+}
+
+_APPLICATION_REVIEW_DECISIONS = {
+    "approved",
+    "changes_requested",
+    "rejected",
+    "rerun_requested",
 }
 
 
@@ -685,6 +708,86 @@ def list_application_records(
         item["form_answers"] = json.loads(item.pop("form_answers_json") or "{}")
         result.append(item)
     return result
+
+
+def record_application_review(
+    application_id: str,
+    decision: str,
+    *,
+    notes: str = "",
+    material_fingerprint: str = "",
+    conn: sqlite3.Connection | None = None,
+) -> int:
+    """Append a human review decision and update the application queue state."""
+    if decision not in _APPLICATION_REVIEW_DECISIONS:
+        raise ValueError(f"Unsupported review decision: {decision}")
+    if decision == "changes_requested" and not notes.strip():
+        raise ValueError("Review notes are required when requesting changes")
+    if conn is None:
+        conn = get_connection()
+
+    application = conn.execute(
+        "SELECT status FROM applications WHERE id = ?",
+        (application_id,),
+    ).fetchone()
+    if application is None:
+        raise KeyError(f"Application not found: {application_id}")
+    allowed_statuses = {
+        "approved": {"ready_for_review", "review_approved"},
+        "changes_requested": {"ready_for_review", "review_approved"},
+        "rejected": {"ready_for_review", "review_approved", "changes_requested"},
+        "rerun_requested": {"ready_for_review", "review_approved", "changes_requested"},
+    }[decision]
+    if application["status"] not in allowed_statuses:
+        raise ValueError(f"Cannot record {decision} while application is {application['status']}")
+
+    now = _utc_now()
+    cursor = conn.execute(
+        """
+        INSERT INTO application_reviews (
+            application_id, decision, notes, material_fingerprint, created_at
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            application_id,
+            decision,
+            notes.strip()[:4000],
+            material_fingerprint,
+            now,
+        ),
+    )
+    next_status = {
+        "approved": "review_approved",
+        "changes_requested": "changes_requested",
+        "rejected": "withdrawn",
+        "rerun_requested": "ready_for_review",
+    }[decision]
+    conn.execute(
+        "UPDATE applications SET status = ?, updated_at = ? WHERE id = ?",
+        (next_status, now, application_id),
+    )
+    conn.commit()
+    return int(cursor.lastrowid)
+
+
+def list_application_reviews(
+    application_id: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> list[dict]:
+    """Return the append-only human review history for one application."""
+    if conn is None:
+        conn = get_connection()
+    rows = conn.execute(
+        """
+        SELECT id, application_id, decision, notes, material_fingerprint, created_at
+        FROM application_reviews
+        WHERE application_id = ?
+        ORDER BY created_at DESC, id DESC
+        """,
+        (application_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def ensure_columns(conn: sqlite3.Connection | None = None) -> list[str]:

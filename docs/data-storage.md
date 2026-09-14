@@ -38,6 +38,8 @@ passwords are not inspected by OpenApplyPilot.
 - `applications`: form-like application history with material approval, final
   approval, answers, document paths, review/submission screenshots, agent logs,
   verification state, and submission timestamps.
+- `application_reviews`: append-only human decisions, notes, reviewed-material
+  fingerprints, and timestamps from the local Review Center.
 - `system_metadata`: migration provenance and local schema metadata.
 - `schema_migrations`: applied schema versions.
 
@@ -53,10 +55,17 @@ Continue an interrupted or `ready_for_review` application with:
 applypilot apply --resume APPLICATION_ID
 ```
 
+Or inspect and decide from the loopback-only Review Center:
+
+```bash
+applypilot review --id APPLICATION_ID
+```
+
 If the original Chrome session no longer exists—or the previous dry run already
-ended—the old reviewed browser state and any final approval are not reusable.
-OpenApplyPilot prepares the form again and requires fresh material and final
-approval before submission.
+ended—the old browser state and any final approval are not reusable.
+OpenApplyPilot prepares the form again. A Review Center material approval is
+reused only while its local profile, resume, cover letter, and verified answer
+fingerprint remains unchanged; final submission always needs fresh approval.
 
 ## Legacy migration
 

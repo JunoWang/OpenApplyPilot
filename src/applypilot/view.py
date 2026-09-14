@@ -268,7 +268,8 @@ def generate_dashboard(output_path: str | None = None) -> str:
   .applications a {{ color: #60a5fa; text-decoration: none; }}
   .application-status {{ display: inline-block; padding: 0.2rem 0.45rem; border-radius: 5px; background: #334155; }}
   .status-submitted {{ background: #064e3b; color: #6ee7b7; }}
-  .status-ready_for_review, .status-approved {{ background: #164e63; color: #67e8f9; }}
+  .status-ready_for_review, .status-review_approved, .status-approved {{ background: #164e63; color: #67e8f9; }}
+  .status-changes_requested {{ background: #713f12; color: #fde68a; }}
   .status-failed, .status-withdrawn {{ background: #7f1d1d; color: #fecaca; }}
   .applications pre {{ white-space: pre-wrap; max-width: 420px; color: #cbd5e1; }}
   .muted {{ color: #94a3b8; }}

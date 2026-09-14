@@ -214,12 +214,31 @@ applypilot run score tailor pdf \
   --url JOB_URL --limit 1               # Safely test one stored job end to end
 applypilot add LINKEDIN_JOB_URL          # Import one pasted LinkedIn job + JD
 applypilot apply --url URL --dry-run    # Approve materials and stop at review
+applypilot review                       # Review documents, answers, evidence, and decide locally
 applypilot apply --url URL              # Review, then explicitly approve Submit
 applypilot apply --resume APPLICATION_ID # Continue a saved application with fresh review
 applypilot apply --url URL --headless   # Supported, but visible review is recommended
 applypilot status                       # Pipeline statistics
 applypilot dashboard                    # Open HTML results dashboard
 ```
+
+### Local Review Center
+
+After a dry run reaches `ready_for_review`, open the local review workspace:
+
+```bash
+applypilot review
+applypilot review --id APPLICATION_ID
+```
+
+The Review Center binds only to `127.0.0.1`. It shows the saved JD, tailored
+resume, cover letter, verified browser answers, screenshot, and agent log. Human
+decisions and notes are appended to SQLite. Requesting changes or rejecting an
+application never launches submission. `Approve & open final browser review`
+re-prepares the application in visible Chrome; the irreversible Submit action
+still requires a separate explicit terminal confirmation. Reviewed materials
+are fingerprinted, so a changed profile, resume, cover letter, or answer set
+invalidates the recorded material approval.
 
 The targeted Stage 3 command only scores, tailors, validates, and exports the
 selected job. It does **not** submit an application. Approved outputs are saved

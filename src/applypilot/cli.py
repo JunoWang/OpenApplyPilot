@@ -458,6 +458,78 @@ def dashboard() -> None:
 
 
 @app.command()
+def review(
+    application_id: Optional[str] = typer.Option(None, "--id", help="Open one application record."),
+    port: int = typer.Option(8765, "--port", min=0, max=65535, help="Local Review Center port."),
+    no_open: bool = typer.Option(False, "--no-open", help="Print the local URL without opening a browser."),
+    model: str = typer.Option("haiku", "--model", "-m", help="Claude model for a requested browser re-run."),
+) -> None:
+    """Open the local application Review Center."""
+    _bootstrap()
+
+    from applypilot.review_center import material_fingerprint, serve_review_center
+
+    def show_url(url: str) -> None:
+        console.print("\n[bold green]Review Center is ready[/bold green]")
+        console.print(f"  Local URL: [link={url}]{url}[/link]")
+        console.print("  Data stays on this Mac. Press Ctrl+C to stop.\n")
+
+    try:
+        action = serve_review_center(
+            port=port,
+            selected_id=application_id,
+            open_browser=not no_open,
+            on_ready=show_url,
+        )
+    except (KeyError, OSError, ValueError) as exc:
+        console.print(f"[red]Could not start Review Center:[/red] {exc}")
+        raise typer.Exit(code=1) from None
+
+    if action is None:
+        return
+
+    from applypilot.config import check_tier
+    from applypilot.database import get_application_record
+
+    check_tier(3, "browser review")
+    try:
+        import langgraph  # noqa: F401
+        from langgraph.checkpoint.sqlite import SqliteSaver  # noqa: F401
+    except ImportError:
+        console.print(
+            "[red]Auto Apply workflow dependencies are missing.[/red]\n"
+            "Install with [bold]pip install 'applypilot[auto-apply]'[/bold]."
+        )
+        raise typer.Exit(code=1) from None
+
+    from applypilot.apply import launcher
+
+    def reviewed_materials_then_terminal(payload) -> bool:
+        if payload.get("kind") != "material_approval":
+            return launcher._terminal_approval(payload)
+        current = get_application_record(action.application_id)
+        if material_fingerprint(current) != action.material_fingerprint:
+            raise RuntimeError("Reviewed materials changed after approval; open the Review Center again")
+        console.print("[green]Using the material approval recorded in Review Center.[/green]")
+        return True
+
+    dry_run = action.kind == "rerun_dry_run"
+    console.print(
+        "\n[bold]Starting a fresh dry-run...[/bold]"
+        if dry_run
+        else "\n[bold]Opening the final browser review...[/bold]"
+    )
+    launcher.main(
+        limit=1,
+        model=model,
+        dry_run=dry_run,
+        workers=1,
+        resume_application_id=action.application_id,
+        approval_callback=reviewed_materials_then_terminal,
+    )
+
+
+@app.command()
 def doctor() -> None:
     """Check your setup and diagnose missing requirements."""
     import shutil
