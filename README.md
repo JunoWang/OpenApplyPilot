@@ -71,19 +71,31 @@ These changes improve correctness, auditability, privacy, and recovery. Their ef
 
 ### 1. Install prerequisites
 
-For stages 1-5:
+You need:
 
 - Python 3.11 or newer
 - Git
 - One LLM provider: OpenAI, Anthropic, Gemini, or a local Ollama server
 
-For Stage 6, also install:
+To use Stage 6 Auto Apply, you also need:
 
 - Google Chrome
 - Node.js 18+ with `npx`
 - Claude Code CLI available as `claude`
 
 Claude Code is the current browser agent even when scoring and tailoring use OpenAI, Gemini, or Ollama.
+
+Check the command-line prerequisites before continuing:
+
+```bash
+python3.11 --version
+git --version
+node --version       # Stage 6 only
+npx --version        # Stage 6 only
+claude --version     # Stage 6 only
+```
+
+If a command is missing, install that prerequisite first. The remaining steps assume `python3.11` is available.
 
 ### 2. Clone this repository and install from source
 
@@ -93,24 +105,37 @@ cd OpenApplyPilot
 
 python3.11 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[auto-apply]"
 
-# Job-board discovery dependency. See the note below.
-python -m pip install --no-deps python-jobspy
-python -m pip install pydantic tls-client requests markdownify regex
+# Install OpenApplyPilot, Auto Apply, and job-board discovery.
+python -m pip install ".[auto-apply]" python-jobspy
 
+# Install the Chromium build used by discovery and enrichment.
 python -m playwright install chromium
 ```
 
-`python-jobspy` currently pins an exact NumPy version in its package metadata. Installing it with `--no-deps` avoids that resolver conflict; the following command installs its runtime dependencies while OpenApplyPilot's normal dependency set supplies pandas and NumPy.
+What the install command means:
+
+- `python -m pip` uses `pip` from the active `.venv`, avoiding accidental installation into another Python.
+- `.` installs OpenApplyPilot from the repository you just cloned.
+- `[auto-apply]` adds LangGraph and its local SQLite checkpointer.
+- `python-jobspy` enables discovery from the supported public job boards.
+
+This is a normal user installation. The developer-only editable flag (`-e`) is intentionally omitted. Each time you open a new terminal, return to the repository and reactivate the environment before using `applypilot`:
+
+```bash
+cd OpenApplyPilot
+source .venv/bin/activate
+```
 
 ### 3. Create the local profile
 
 ```bash
 applypilot init
 applypilot doctor
+python -m pip check
 ```
+
+`doctor` should report the expected local files, provider, and installed tools. `pip check` should print `No broken requirements found.`
 
 The setup wizard copies a master `.txt` or `.pdf` resume, asks for reusable application facts, creates search preferences, and writes provider settings under `~/.openapplypilot/`. AI stages require `resume.txt`; when starting from PDF, provide a plain-text copy when prompted.
 
@@ -272,7 +297,7 @@ Use `applypilot COMMAND --help` for every flag.
 Run the test suite with:
 
 ```bash
-python -m pip install -e ".[dev,auto-apply]"
+python -m pip install -e ".[dev,auto-apply]" python-jobspy
 python -m pytest -q
 ruff check src tests
 ```
