@@ -25,7 +25,7 @@ The auto-apply browser account is selected by `browser.chrome_account_email`
 in `profile.json`. Chrome's profile metadata is used to locate it; cookies and
 passwords are not inspected by OpenApplyPilot.
 
-## Database schema v4
+## Database schema v5
 
 - `jobs`: current job and stage state; AI and application failures remain
   explicit and retryable.

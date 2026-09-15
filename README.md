@@ -1,261 +1,282 @@
-<!-- logo here -->
+# OpenApplyPilot
 
-> **⚠️ ApplyPilot** is the original open-source project, created by [Pickle-Pixel](https://github.com/Pickle-Pixel) and first published on GitHub on **February 17, 2026**. We are **not affiliated** with applypilot.app, useapplypilot.com, or any other product using the "ApplyPilot" name. These sites are **not associated with this project** and may misrepresent what they offer. If you're looking for the autonomous, open-source job application agent — you're in the right place.
+Local-first job discovery, resume tailoring, and human-approved application automation.
 
-# ApplyPilot
-
-**Local-first, human-approved job application automation. Open source.**
-
-[![PyPI version](https://img.shields.io/pypi/v/applypilot?color=blue)](https://pypi.org/project/applypilot/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/JunoWang/OpenApplyPilot?style=social)](https://github.com/JunoWang/OpenApplyPilot)
 
+OpenApplyPilot is derived from [Pickle-Pixel/ApplyPilot](https://github.com/Pickle-Pixel/ApplyPilot). It keeps the original six-stage product flow, then rebuilds the parts that need stronger local persistence, factual resume validation, recoverable browser state, and human review. This repository is not affiliated with applypilot.app, useapplypilot.com, or other commercial products using the ApplyPilot name.
 
+> **Project status:** macOS-first beta. Stages 1-5 work as a repeatable local pipeline. Stage 6A supports one explicitly selected application at a time, with a deterministic Ashby adapter and mandatory human approval. Bulk or continuous submission is intentionally disabled.
 
+## What works today
 
-https://github.com/user-attachments/assets/7ee3417f-43d4-4245-9952-35df1e77f2df
+| Capability | Current status |
+|---|---|
+| Multi-source discovery | Indeed, LinkedIn, ZipRecruiter, Google Jobs, and Glassdoor through JobSpy, plus 48 Workday employers and 30 configured career sites. Individual sources can still block scraping. |
+| Full JD storage | Job descriptions are versioned in local SQLite and remain available later for interview preparation. |
+| Fit scoring | OpenAI, Anthropic Claude, Gemini, Ollama, and OpenAI-compatible endpoints are supported with explicit provider/model selection. |
+| Tailored resumes | Per-job generation with deterministic fact checks, project-identity checks, an LLM factuality judge, retries, and reviewable TXT/DOCX/PDF artifacts. |
+| Cover letters | Per-job cover letters saved locally and linked to the job record. |
+| Safe Auto Apply | Claude Code fills one selected form. LangGraph persists two approval gates and recovery state. Dry-run cannot submit. |
+| ATS verification | Ashby forms receive deterministic repair and DOM-level verification after agent navigation. Unknown required facts fail closed. |
+| Review Center | A loopback-only web UI shows the JD, documents, verified answers, screenshot, agent log, and append-only review history. |
+| Application history | Submitted, failed, withdrawn, and review-ready applications are stored as form-like records in SQLite. |
 
+## The six-stage pipeline
 
----
+`applypilot run` executes stages 1-5 plus document export. Stage 6 is always a separate command so discovering jobs can never silently turn into submitting applications.
 
-## What It Does
+| Stage | Command | Output and gate |
+|---|---|---|
+| 1. Discover | `applypilot run discover` | Deduplicated job records from configured boards and employer sites. |
+| 2. Enrich | `applypilot run enrich` | Full JD, application URL, and an immutable JD snapshot. |
+| 3. Score | `applypilot run score` | A 1-10 fit score and written reasoning against the master resume. |
+| 4. Tailor | `applypilot run tailor` | A source-grounded resume that must pass validation before it is accepted. |
+| 5. Cover and export | `applypilot run cover pdf` | Cover letter plus private TXT, DOCX, PDF, JD snapshot, unified diff, and validation report. |
+| 6. Review and apply | `applypilot apply --url URL` | Material approval, form preparation, browser evidence, final approval, then and only then Submit. |
 
-ApplyPilot is a 6-stage job application pipeline. It discovers jobs across 5+ boards, scores them against your resume with AI, tailors your resume per job, writes cover letters, and prepares browser applications. Auto-Apply requires explicit approval of the materials and a second explicit approval immediately before submission.
+The Stage 6 safety flow is:
 
-Three commands. That's it.
-
-```bash
-pip install 'applypilot[auto-apply]'
-pip install --no-deps python-jobspy && pip install pydantic tls-client requests markdownify regex
-applypilot init          # one-time setup: resume, profile, preferences, API keys
-applypilot doctor        # verify your setup — shows what's installed and what's missing
-applypilot run           # discover > enrich > score > tailor > cover letters
-applypilot run -w 4      # same but parallel (4 threads for discovery/enrichment)
-applypilot apply --url URL --dry-run  # approve materials, fill form, never submit
-applypilot apply --url URL            # two approvals; second gate controls Submit
+```text
+select one stored job
+  -> approve resume and cover letter
+  -> prepare form without submitting
+  -> inspect Review Center and visible browser
+  -> approve the irreversible Submit action
+  -> submit and save evidence
 ```
 
-> **Why two install commands?** `python-jobspy` pins an exact numpy version in its metadata that conflicts with pip's resolver, but works fine at runtime with any modern numpy. The `--no-deps` flag bypasses the resolver; the second command installs jobspy's actual runtime dependencies. Everything except `python-jobspy` installs normally.
+A rejected, changed, expired, or interrupted application never skips back into Submit. OpenApplyPilot either stops or prepares the form again and asks for fresh approval.
 
----
+## What we improved and why
 
-## Two Paths
+| Change | Why it was needed | User-visible result |
+|---|---|---|
+| Local schema v5 and versioned JD snapshots | A job URL alone is not enough when the posting disappears before an interview. | Jobs, historical JDs, pipeline events, and applications remain searchable on the Mac. |
+| Provider-native LLM layer | Implicit fallback hides cost, model changes, and the real source of failures. | OpenAI, Anthropic, Gemini, and Ollama are selected explicitly; a failed provider is recorded instead of silently switching. |
+| Source-grounded resume validator | The upstream tailoring path could fail to produce a usable resume or introduce unsupported claims. | Company, school, project identity, dates, numbers, and technical skills are checked before export. Failed output does not advance. |
+| Review artifacts | A generated document is hard to trust without seeing exactly what changed. | Each job keeps the master-to-tailored diff, validation JSON, stored JD, and final files. |
+| LangGraph only around Stage 6 | Browser work has pauses, restarts, and irreversible actions; ordinary scoring and tailoring do not need agent orchestration. | Approval state survives process restarts, while stages 1-5 remain simple Python services backed by SQLite. |
+| Browser-session invalidation | A saved approval must not authorize a different or expired browser session. | Interrupted work is re-prepared and the final approval is cleared before submission can continue. |
+| Deterministic Ashby adapter | An agent saying “done” does not prove that the real form contains the correct values. | Stable fields are repaired from the saved profile and the actual DOM is checked before review or submission. |
+| Local Review Center | Terminal-only review makes long JDs, documents, answers, and screenshots difficult to compare. | One local page presents the entire application package and stores every decision with notes. |
+| Material fingerprints | Approval should apply to exact files and answers, not merely an application ID. | Editing the profile, resume, cover letter, or answers invalidates the old material approval. |
+| Isolated Chrome profile selection | Using the wrong signed-in Chrome profile can fill or submit under the wrong account. | The configured account email selects one Chrome profile and copies only session-related state into a private worker directory; Chrome password-store files are excluded. |
 
-### Full Pipeline (recommended)
-**Requires:** Python 3.11+, one supported LLM provider, Node.js (for npx), Claude Code CLI, Chrome
+These changes improve correctness, auditability, privacy, and recovery. Their effectiveness is checked with regression tests and observable safety invariants: dry-run produces zero submissions, Submit is unreachable before both approvals, changed materials invalidate approval, stale browser sessions require re-preparation, and verified form values come from the browser DOM rather than the agent's summary. They do **not** yet prove a higher interview conversion rate; that requires real application outcomes over time.
 
-Runs all 6 stages, from job discovery to a reviewed application submission. Stage 6A intentionally handles one selected job at a time and disables continuous/bulk submission until the safety workflow is validated.
+## macOS setup
 
-### Discovery + Tailoring Only
-**Requires:** Python 3.11+ and OpenAI, Anthropic, Gemini, or Ollama
+### 1. Install prerequisites
 
-Runs stages 1-5: discovers jobs, scores them, tailors your resume, generates cover letters. You submit applications manually with the AI-prepared materials.
+For stages 1-5:
 
----
+- Python 3.11 or newer
+- Git
+- One LLM provider: OpenAI, Anthropic, Gemini, or a local Ollama server
 
-## The Pipeline
+For Stage 6, also install:
 
-| Stage | What Happens |
-|-------|-------------|
-| **1. Discover** | Scrapes 5 job boards (Indeed, LinkedIn, Glassdoor, ZipRecruiter, Google Jobs) + 48 Workday employer portals + 30 direct career sites |
-| **2. Enrich** | Fetches full job descriptions via JSON-LD, CSS selectors, or AI-powered extraction |
-| **3. Score** | AI rates every job 1-10 based on your resume and preferences. Only high-fit jobs proceed |
-| **4. Tailor** | AI rewrites your resume per job: reorganizes, emphasizes relevant experience, adds keywords. Never fabricates |
-| **5. Cover Letter** | AI generates a targeted cover letter per job |
-| **6. Auto-Apply** | Claude Code prepares one selected form; LangGraph checkpoints material approval and final submission approval locally |
+- Google Chrome
+- Node.js 18+ with `npx`
+- Claude Code CLI available as `claude`
 
-Each stage is independent. Run them all or pick what you need.
+Claude Code is the current browser agent even when scoring and tailoring use OpenAI, Gemini, or Ollama.
 
----
+### 2. Clone this repository and install from source
 
-## ApplyPilot vs The Alternatives
+```bash
+git clone https://github.com/JunoWang/OpenApplyPilot.git
+cd OpenApplyPilot
 
-| Feature | ApplyPilot | AIHawk | Manual |
-|---------|-----------|--------|--------|
-| Job discovery | 5 boards + Workday + direct sites | LinkedIn only | One board at a time |
-| AI scoring | 1-10 fit score per job | Basic filtering | Your gut feeling |
-| Resume tailoring | Per-job AI rewrite | Template-based | Hours per application |
-| Auto-apply | Full form navigation with two human approval gates | LinkedIn Easy Apply only | Click, type, repeat |
-| Supported sites | Indeed, LinkedIn, Glassdoor, ZipRecruiter, Google Jobs, 46 Workday portals, 28 direct sites | LinkedIn | Whatever you open |
-| License | AGPL-3.0 | MIT | N/A |
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[auto-apply]"
 
----
+# Job-board discovery dependency. See the note below.
+python -m pip install --no-deps python-jobspy
+python -m pip install pydantic tls-client requests markdownify regex
 
-## Requirements
+python -m playwright install chromium
+```
 
-| Component | Required For | Details |
-|-----------|-------------|---------|
-| Python 3.11+ | Everything | Core runtime |
-| Node.js 18+ | Auto-apply | Needed for `npx` to run Playwright MCP server |
-| LLM provider | Scoring, tailoring, cover letters | OpenAI, Anthropic Claude, Gemini, and Ollama are supported |
-| Chrome/Chromium | Auto-apply | Auto-detected on most systems |
-| Claude Code CLI | Auto-apply | Install from [claude.ai/code](https://claude.ai/code) |
+`python-jobspy` currently pins an exact NumPy version in its package metadata. Installing it with `--no-deps` avoids that resolver conflict; the following command installs its runtime dependencies while OpenApplyPilot's normal dependency set supplies pandas and NumPy.
 
-Cloud providers require their own API key. Ollama can run entirely on the local machine.
+### 3. Create the local profile
 
-### Optional
+```bash
+applypilot init
+applypilot doctor
+```
 
-| Component | What It Does |
-|-----------|-------------|
-| CapSolver API key | Solves CAPTCHAs during auto-apply (hCaptcha, reCAPTCHA, Turnstile, FunCaptcha). Without it, CAPTCHA-blocked applications just fail gracefully |
+The setup wizard copies a master `.txt` or `.pdf` resume, asks for reusable application facts, creates search preferences, and writes provider settings under `~/.openapplypilot/`. AI stages require `resume.txt`; when starting from PDF, provide a plain-text copy when prompted.
 
-> **Note:** python-jobspy is installed separately with `--no-deps` because it pins an exact numpy version in its metadata that conflicts with pip's resolver. It works fine with modern numpy at runtime.
+The API key is saved in `~/.openapplypilot/.env` with owner-only permissions. It is not written into the repository. The wizard currently uses guided questions for `profile.json`; automatic extraction of all profile fields from the resume is not implemented yet.
 
----
+### 4. Configure an LLM provider
 
-## Configuration
+`applypilot init` handles one provider interactively. You can also edit `~/.openapplypilot/.env`:
 
-All generated by `applypilot init` under `~/.openapplypilot/`:
+```dotenv
+# Choose exactly one default provider.
+OPENAPPLYPILOT_LLM_PROVIDER=openai
+OPENAPPLYPILOT_LLM_MODEL=gpt-4o-mini
+OPENAI_API_KEY=your-key
+```
 
-### `profile.json`
-Your personal data in one structured file: contact info, work authorization, compensation, experience, skills, resume facts (preserved during tailoring), EEO defaults, and the Chrome account email used for auto-apply. Powers scoring, tailoring, and form auto-fill. On macOS, ApplyPilot resolves that email to its local Chrome profile and copies only that profile into an isolated worker directory; it never reads browser passwords.
+| Provider value | Required setting | Example model |
+|---|---|---|
+| `openai` | `OPENAI_API_KEY` | `gpt-4o-mini` |
+| `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-5` |
+| `gemini` | `GEMINI_API_KEY` | `gemini-2.0-flash` |
+| `ollama` | `OLLAMA_BASE_URL` | `llama3.2` |
 
-### `searches.yaml`
-Job search queries, target titles, locations, boards. Run multiple searches with different parameters.
+Set `OPENAPPLYPILOT_<STAGE>_PROVIDER` and `OPENAPPLYPILOT_<STAGE>_MODEL` to route a specific `SCORE`, `TAILOR`, `COVER`, `DISCOVER`, or `ENRICH` stage differently. OpenApplyPilot never falls back to a different provider after a request failure.
 
-### `.env`
-API keys and runtime config. Select a default with `OPENAPPLYPILOT_LLM_PROVIDER`
-and `OPENAPPLYPILOT_LLM_MODEL`, then provide the matching `OPENAI_API_KEY`,
-`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or `OLLAMA_BASE_URL`. Each AI stage can
-override the default with `OPENAPPLYPILOT_<STAGE>_PROVIDER` and
-`OPENAPPLYPILOT_<STAGE>_MODEL`. See `.env.example` for the complete format.
+## How to use it
 
-### Package configs (shipped with ApplyPilot)
-- `config/employers.yaml` - Workday employer registry (48 preconfigured)
-- `config/sites.yaml` - Direct career sites (30+), blocked sites, base URLs, manual ATS domains
-- `config/searches.example.yaml` - Example search configuration
+### Test one real job first
 
-### Local data layout
+Import a LinkedIn job URL, then use the canonical URL printed by the command:
 
-OpenApplyPilot keeps personal data on the local machine by default:
+```bash
+applypilot add 'LINKEDIN_JOB_URL'
 
-| Path | Contents |
-|------|----------|
-| `~/.openapplypilot/openapplypilot.db` | Jobs, versioned JD snapshots, pipeline runs, and application history |
-| `~/.openapplypilot/profile.json` | Application profile, Chrome account selection, and reusable answers |
-| `~/.openapplypilot/.env` | Provider keys; created with owner-only permissions |
-| `~/.openapplypilot/tailored_resumes/` | Per-job tailored resumes |
-| `~/.openapplypilot/cover_letters/` | Per-job cover letters |
-| `~/.openapplypilot/application_reviews/` | Final review screenshots and submission evidence |
-| `~/.openapplypilot/auto_apply_checkpoints.db` | Local LangGraph approval and resume checkpoints |
-| `~/.openapplypilot/logs/openapplypilot.log` | Rotating, credential-redacted runtime log |
-| `~/.openapplypilot/archives/` | Content-addressed legacy database backups |
+applypilot run score tailor cover pdf \
+  --url 'CANONICAL_JOB_URL' \
+  --limit 1 \
+  --min-score 1 \
+  --validation normal
+```
 
-Override the root directory with `OPENAPPLYPILOT_HOME` when needed.
+This only creates local records and documents. It does not open an application form or submit anything.
 
-To migrate an upstream ApplyPilot installation, preview first and then run the
-same command without `--dry-run`:
+### Run normal discovery and document generation
+
+```bash
+applypilot run
+applypilot status
+applypilot dashboard
+```
+
+Useful variants:
+
+```bash
+applypilot run discover enrich --workers 4
+applypilot run score tailor cover pdf --min-score 8 --limit 20
+applypilot run --dry-run
+```
+
+### Prepare an application without submitting
+
+This is the recommended first Stage 6 test:
+
+```bash
+applypilot apply --url 'CANONICAL_JOB_URL' --dry-run
+applypilot review
+```
+
+The dry-run can reach `ready_for_review`, but cannot mark the job applied, click Submit, or consume the production retry budget. The Review Center binds to `127.0.0.1` and displays the saved JD, tailored resume, cover letter, verified form answers, screenshot, agent log, and decision history.
+
+From the Review Center you can request changes, reject, rerun the dry-run, or approve the reviewed materials and reopen a visible final browser review. The final Submit action still requires a separate explicit confirmation in the terminal.
+
+### Run the submission flow
+
+```bash
+applypilot apply --url 'CANONICAL_JOB_URL'
+```
+
+To continue a saved application:
+
+```bash
+applypilot apply --resume APPLICATION_ID
+```
+
+Submission is irreversible. Read the saved answers and inspect the live form before approving the final terminal prompt.
+
+### Migrate an upstream ApplyPilot installation
+
+Preview the migration before it writes anything:
 
 ```bash
 applypilot migrate --dry-run
 applypilot migrate
 ```
 
-Migration imports discovery data and full JDs, but intentionally resets scores,
-tailored materials, and application state. The source `~/.applypilot/` directory
-is preserved after a verified archive is created.
+Migration reads `~/.applypilot/` without modifying it, creates a verified archive, imports job identity and full JDs, and resets old scores, generated materials, and application state so the new pipeline can rebuild them consistently.
 
----
+## Local data and privacy
 
-## How Stages Work
+The default data root is `~/.openapplypilot/`. Override it with `OPENAPPLYPILOT_HOME`.
 
-### Discover
-Queries Indeed, LinkedIn, Glassdoor, ZipRecruiter, Google Jobs via JobSpy. Scrapes 48 Workday employer portals (configurable in `employers.yaml`). Hits 30 direct career sites with custom extractors. Deduplicates by URL.
+| Path | Contents |
+|---|---|
+| `openapplypilot.db` | Jobs, versioned JD snapshots, pipeline history, application records, and review decisions. |
+| `profile.json` | Contact data, work authorization, reusable form answers, resume facts, and selected Chrome account email. |
+| `.env` | Provider keys and runtime configuration. |
+| `resume.txt` / `resume.pdf` | Master resume files. |
+| `tailored_resumes/` | Tailored TXT, DOCX, PDF, JD copy, diff, and validation report. |
+| `cover_letters/` | Per-job cover letters. |
+| `application_reviews/` | Review and submission screenshots plus durable evidence. |
+| `auto_apply_checkpoints.db` | Local LangGraph checkpoints for Stage 6. |
+| `logs/openapplypilot.log` | Rotating runtime log with credential redaction. |
+| `chrome-workers/` | Private, account-specific Chrome worker copies. |
+| `archives/` | Content-addressed legacy database archives. |
 
-### Enrich
-Visits each job URL and extracts the full description. 3-tier cascade: JSON-LD structured data, then CSS selector patterns, then AI-powered extraction for unknown layouts.
+LangSmith tracing is forced off unless `OPENAPPLYPILOT_LANGSMITH_OPT_IN=true` is set. To actually send traces, you must also configure LangSmith's own tracing and API-key variables. Do not expose the Review Center beyond localhost; it is designed as a single-user local tool, not a hosted service.
 
-### Score
-AI scores every job 1-10 against your profile. 9-10 = strong match, 7-8 = good, 5-6 = moderate, 1-4 = skip. Only jobs above your threshold proceed to tailoring.
+See [Local data storage](docs/data-storage.md) for schema and migration details and [ADR 0001](docs/architecture/0001-hybrid-pipeline-orchestration.md) for the LangGraph/LangSmith decision.
 
-### Tailor
-Generates a custom resume per job: reorders experience, emphasizes relevant skills, incorporates keywords from the job description. Your `resume_facts` (companies, projects, metrics) are preserved exactly. The AI reorganizes but never fabricates.
+## CLI reference
 
-Project names and their subtitles or dates are immutable. Tailoring can reorder
-projects and rewrite supported bullet points, but any renamed, omitted, or newly
-invented project fails validation before DOCX/PDF export.
+```text
+applypilot init                           First-time local setup
+applypilot doctor                         Diagnose missing files and dependencies
+applypilot add URL                        Import one LinkedIn job and full JD
+applypilot run [STAGES...]                Run discover/enrich/score/tailor/cover/pdf
+applypilot status                         Show local pipeline statistics
+applypilot dashboard                      Open the job-results dashboard
+applypilot apply --url URL --dry-run       Fill one form and stop before submission
+applypilot review [--id APPLICATION_ID]    Open the local Review Center
+applypilot apply --url URL                 Run the two-approval submission workflow
+applypilot apply --resume APPLICATION_ID   Resume a saved workflow
+applypilot apply --gen --url URL           Generate a non-submitting debug prompt
+applypilot apply --mark-applied URL         Record a manual submission
+applypilot apply --mark-failed URL          Record a manual failure
+applypilot apply --reset-failed             Reset failed jobs for retry
+applypilot migrate --dry-run                Preview legacy migration
+```
 
-### Cover Letter
-Writes a targeted cover letter per job referencing the specific company, role, and how your experience maps to their requirements.
+Use `applypilot COMMAND --help` for every flag.
 
-### Auto-Apply
-Claude Code launches a Chrome instance, navigates to the selected application page, fills personal information and work history, uploads the tailored resume and cover letter, and answers screening questions. LangGraph pauses before browser preparation for material approval and again on the completed form before the separate submit phase. Review screenshots, form answers, agent logs, approval times, and submission evidence remain under `~/.openapplypilot/`.
+## Current limitations
 
-For supported ATS forms, deterministic adapters repair and verify the final browser state after agent navigation. The Ashby adapter fills stable labeled fields, selects autocomplete locations, uploads the approved resume, applies profile-backed Yes/No answers, clears unsupported optional values, and records the browser's actual field state. Unknown required answers fail closed instead of being guessed.
+- macOS is the first end-to-end supported environment. Windows and Linux paths exist but have not received the same real-browser validation.
+- The deterministic post-agent ATS adapter currently covers Ashby. Other forms remain agent-driven and may stop for manual completion or fail verification.
+- Stage 6 requires Claude Code CLI; the multi-provider LLM setting applies to discovery, enrichment, scoring, tailoring, and cover letters.
+- Bulk workers and `--continuous` are disabled for Stage 6A. The system processes one selected application at a time.
+- CAPTCHA, SSO, login walls, unusual widgets, and unknown required questions can require manual action. OpenApplyPilot does not invent answers.
+- Resume-to-profile extraction is still pending; setup copies the resume but asks for structured profile fields.
+- The project has safety and regression evidence, but no claim is made that automation improves interview or offer rates.
 
-Stage 6A requires `--url`, one visible worker, and no continuous mode. A dry run ends at `ready_for_review`; it can never set the job to applied or consume the production retry budget. LangSmith tracing is disabled unless `OPENAPPLYPILOT_LANGSMITH_OPT_IN=true` is explicitly configured.
+## Development and documentation
 
-The Playwright MCP server is configured automatically at runtime per worker. No manual MCP setup needed.
+- [Contributing guide](CONTRIBUTING.md)
+- [Local data storage](docs/data-storage.md)
+- [Hybrid orchestration decision](docs/architecture/0001-hybrid-pipeline-orchestration.md)
+- [Single-job tailoring acceptance record](docs/stage-3-single-job-validation.md)
+
+Run the test suite with:
 
 ```bash
-# Utility modes (no Chrome/Claude needed)
-applypilot apply --mark-applied URL    # manually mark a job as applied
-applypilot apply --mark-failed URL     # manually mark a job as failed
-applypilot apply --reset-failed        # reset all failed jobs for retry
-applypilot apply --gen --url URL       # generate prompt file for manual debugging
+python -m pip install -e ".[dev,auto-apply]"
+python -m pytest -q
+ruff check src tests
 ```
-
----
-
-## CLI Reference
-
-```
-applypilot init                         # First-time setup wizard
-applypilot doctor                       # Verify setup, diagnose missing requirements
-applypilot run [stages...]              # Run pipeline stages (or 'all')
-applypilot run --workers 4              # Parallel discovery/enrichment
-applypilot run --stream                 # Concurrent stages (streaming mode)
-applypilot run --min-score 8            # Override score threshold
-applypilot run --dry-run                # Preview without executing
-applypilot run --validation lenient     # Relax validation (recommended for Gemini free tier)
-applypilot run --validation strict      # Strictest validation (retries on any banned word)
-applypilot run score tailor pdf \
-  --url JOB_URL --limit 1               # Safely test one stored job end to end
-applypilot add LINKEDIN_JOB_URL          # Import one pasted LinkedIn job + JD
-applypilot apply --url URL --dry-run    # Approve materials and stop at review
-applypilot review                       # Review documents, answers, evidence, and decide locally
-applypilot apply --url URL              # Review, then explicitly approve Submit
-applypilot apply --resume APPLICATION_ID # Continue a saved application with fresh review
-applypilot apply --url URL --headless   # Supported, but visible review is recommended
-applypilot status                       # Pipeline statistics
-applypilot dashboard                    # Open HTML results dashboard
-```
-
-### Local Review Center
-
-After a dry run reaches `ready_for_review`, open the local review workspace:
-
-```bash
-applypilot review
-applypilot review --id APPLICATION_ID
-```
-
-The Review Center binds only to `127.0.0.1`. It shows the saved JD, tailored
-resume, cover letter, verified browser answers, screenshot, and agent log. Human
-decisions and notes are appended to SQLite. Requesting changes or rejecting an
-application never launches submission. `Approve & open final browser review`
-re-prepares the application in visible Chrome; the irreversible Submit action
-still requires a separate explicit terminal confirmation. Reviewed materials
-are fingerprinted, so a changed profile, resume, cover letter, or answer set
-invalidates the recorded material approval.
-
-The targeted Stage 3 command only scores, tailors, validates, and exports the
-selected job. It does **not** submit an application. Approved outputs are saved
-with owner-only permissions under `~/.openapplypilot/tailored_resumes/` as TXT,
-DOCX, PDF, a JD snapshot, a unified diff, and a JSON validation report. See the
-[single-job Stage 3 acceptance record](docs/stage-3-single-job-validation.md).
-
----
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, and PR guidelines.
-
----
 
 ## License
 
-ApplyPilot is licensed under the [GNU Affero General Public License v3.0](LICENSE).
-
-You are free to use, modify, and distribute this software. If you deploy a modified version as a service, you must release your source code under the same license.
+OpenApplyPilot is licensed under the [GNU Affero General Public License v3.0](LICENSE). You may use, modify, and distribute it under that license. If you offer a modified version over a network, review the AGPL source-availability obligations that apply to your deployment.
