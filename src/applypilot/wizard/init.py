@@ -54,9 +54,11 @@ def _setup_resume() -> None:
 
         if suffix == ".txt":
             shutil.copy2(src, RESUME_PATH)
+            RESUME_PATH.chmod(0o600)
             console.print(f"[green]Copied to {RESUME_PATH}[/green]")
         elif suffix == ".pdf":
             shutil.copy2(src, RESUME_PDF_PATH)
+            RESUME_PDF_PATH.chmod(0o600)
             console.print(f"[green]Copied to {RESUME_PDF_PATH}[/green]")
 
             # Also ask for a plain-text version for LLM consumption
@@ -68,6 +70,7 @@ def _setup_resume() -> None:
                 txt_src = Path(txt_path_str.strip().strip('"').strip("'")).expanduser().resolve()
                 if txt_src.exists():
                     shutil.copy2(txt_src, RESUME_PATH)
+                    RESUME_PATH.chmod(0o600)
                     console.print(f"[green]Copied to {RESUME_PATH}[/green]")
                 else:
                     console.print("[yellow]File not found, skipping plain-text copy.[/yellow]")
@@ -213,6 +216,7 @@ def _setup_profile() -> dict:
 
     # Save
     PROFILE_PATH.write_text(json.dumps(profile, indent=2, ensure_ascii=False), encoding="utf-8")
+    PROFILE_PATH.chmod(0o600)
     console.print(f"\n[green]Profile saved to {PROFILE_PATH}[/green]")
     return profile
 
@@ -262,6 +266,7 @@ def _setup_searches() -> None:
         lines.append(f"    tier: {min(i + 1, 3)}")
 
     SEARCH_CONFIG_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    SEARCH_CONFIG_PATH.chmod(0o600)
     console.print(f"[green]Search config saved to {SEARCH_CONFIG_PATH}[/green]")
 
 
@@ -297,17 +302,17 @@ def _setup_ai_features() -> None:
     ]
 
     if provider == "gemini":
-        api_key = Prompt.ask("Gemini API key (from aistudio.google.com)")
+        api_key = Prompt.ask("Gemini API key (from aistudio.google.com)", password=True)
         model = Prompt.ask("Model", default="gemini-2.0-flash")
         env_lines.append(f"GEMINI_API_KEY={api_key}")
         env_lines.append(f"OPENAPPLYPILOT_LLM_MODEL={model}")
     elif provider == "openai":
-        api_key = Prompt.ask("OpenAI API key")
+        api_key = Prompt.ask("OpenAI API key", password=True)
         model = Prompt.ask("Model", default="gpt-4o-mini")
         env_lines.append(f"OPENAI_API_KEY={api_key}")
         env_lines.append(f"OPENAPPLYPILOT_LLM_MODEL={model}")
     elif provider == "anthropic":
-        api_key = Prompt.ask("Anthropic API key")
+        api_key = Prompt.ask("Anthropic API key", password=True)
         model = Prompt.ask("Model", default="claude-sonnet-4-5")
         env_lines.append(f"ANTHROPIC_API_KEY={api_key}")
         env_lines.append(f"OPENAPPLYPILOT_LLM_MODEL={model}")
@@ -355,7 +360,7 @@ def _setup_auto_apply() -> None:
     # Optional: CapSolver for CAPTCHAs
     console.print("\n[dim]Some job sites use CAPTCHAs. CapSolver can handle them automatically.[/dim]")
     if Confirm.ask("Configure CapSolver API key? (optional)", default=False):
-        capsolver_key = Prompt.ask("CapSolver API key")
+        capsolver_key = Prompt.ask("CapSolver API key", password=True)
         # Append to existing .env or create
         if ENV_PATH.exists():
             existing = ENV_PATH.read_text(encoding="utf-8")
