@@ -418,6 +418,15 @@ def run_wizard() -> None:
     _setup_auto_apply()
     console.print()
 
+    # A completed setup should pass `applypilot doctor` before the user runs
+    # another command. Create the local database and log now instead of relying
+    # on a later pipeline command to bootstrap them implicitly.
+    from applypilot.database import init_db
+    from applypilot.logging_setup import configure_file_logging
+
+    configure_file_logging()
+    init_db()
+
     # Done — show tier status
     from applypilot.config import TIER_COMMANDS, TIER_LABELS, get_tier
 
