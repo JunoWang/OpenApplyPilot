@@ -136,7 +136,7 @@ def validate_json_fields(
         for fake in FABRICATION_WATCHLIST:
             if len(fake) <= 2:
                 continue
-            if fake in skills_text and fake not in allowed_skills:
+            if _contains_term(skills_text, fake) and fake not in allowed_skills:
                 errors.append(f"Fabricated skill: '{fake}'")
 
     # Experience: preserved companies must be present (always enforced)
@@ -146,7 +146,13 @@ def validate_json_fields(
     if isinstance(data["experience"], list):
         for company in preserved_companies:
             has_company = any(
-                company.lower() in str(e.get("header", "")).lower()
+                company.lower()
+                in " ".join(
+                    (
+                        str(e.get("header", "")),
+                        str(e.get("subtitle", "")),
+                    )
+                ).lower()
                 for e in data["experience"]
             )
             if not has_company:
@@ -228,6 +234,15 @@ def _section_text(text: str, start_name: str, end_name: str | None = None) -> st
 
 def _normalise_skill(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
+
+
+def _contains_term(text: str, term: str) -> bool:
+    """Match a watchlist term without accepting it inside a larger token."""
+    return re.search(
+        rf"(?<![A-Za-z0-9]){re.escape(term)}(?![A-Za-z0-9])",
+        text,
+        flags=re.IGNORECASE,
+    ) is not None
 
 
 def validate_tailored_resume(
@@ -322,7 +337,7 @@ def validate_tailored_resume(
         for fake in FABRICATION_WATCHLIST:
             if len(fake) <= 2:
                 continue
-            if fake in skills_block and fake not in allowed_skills:
+            if _contains_term(skills_block, fake) and fake not in allowed_skills:
                 errors.append(f"FABRICATED SKILL in Technical Skills: '{fake}'")
 
     # 8. Reject technical skills that were not present in the original resume.
@@ -361,7 +376,7 @@ def validate_tailored_resume(
         for fake in FABRICATION_WATCHLIST:
             if len(fake) <= 2:
                 continue
-            if fake in text_lower and fake not in original_lower:
+            if _contains_term(text_lower, fake) and not _contains_term(original_lower, fake):
                 errors.append(f"New tool/skill appeared: '{fake}' (not in original)")
 
     # 9. Em dashes (should be auto-fixed by sanitize_text, but safety net)
