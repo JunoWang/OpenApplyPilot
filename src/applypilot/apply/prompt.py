@@ -658,6 +658,7 @@ Cover Letter PDF (upload if asked): {cl_upload_path or "N/A"}
 == STEP-BY-STEP ==
 1. browser_navigate to the job URL.
 2. browser_snapshot to read the page. Then run CAPTCHA DETECT (see CAPTCHA section). If a CAPTCHA is found, solve it before continuing.
+2a. If a cookie/privacy banner blocks the page, click Decline, Reject, or Only necessary. If no non-essential opt-out exists, click Accept Cookies so the application controls become usable. Then take one fresh snapshot before continuing.
 3. LOCATION CHECK. Read the page for location info. If not eligible, output RESULT and stop.
 4. Find and click the Apply button. If email-only (page says "email resume to X"):
    - {email_instruction}
