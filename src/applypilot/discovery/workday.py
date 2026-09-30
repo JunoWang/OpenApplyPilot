@@ -362,6 +362,7 @@ def _process_one(
     employers: dict,
     search_text: str,
     location_filter: bool,
+    max_results: int,
     accept_locs: list[str],
     reject_locs: list[str],
 ) -> dict:
@@ -372,6 +373,7 @@ def _process_one(
         jobs = search_employer(
             employer_key, emp, search_text,
             location_filter=location_filter,
+            max_results=max_results,
             accept_locs=accept_locs,
             reject_locs=reject_locs,
         )
@@ -440,7 +442,7 @@ def scrape_employers(
             futures = {
                 pool.submit(
                     _process_one, key, employers, search_text,
-                    location_filter, accept_locs, reject_locs,
+                    location_filter, max_results, accept_locs, reject_locs,
                 ): key
                 for key in valid_keys
             }
@@ -463,7 +465,7 @@ def scrape_employers(
         for key in valid_keys:
             result = _process_one(
                 key, employers, search_text,
-                location_filter, accept_locs, reject_locs,
+                location_filter, max_results, accept_locs, reject_locs,
             )
             completed += 1
             total_new += result["new"]
@@ -528,6 +530,7 @@ def run_workday_discovery(employers: dict | None = None, workers: int = 1) -> di
         setup_proxy(proxy)
 
     location_filter = search_cfg.get("workday_location_filter", True)
+    max_results = search_cfg.get("defaults", {}).get("results_per_site", 0)
 
     log.info("Workday crawl: %d queries x %d employers (workers=%d)", len(queries), len(employers), workers)
 
@@ -541,6 +544,7 @@ def run_workday_discovery(employers: dict | None = None, workers: int = 1) -> di
             search_text=query,
             employers=employers,
             location_filter=location_filter,
+            max_results=max_results,
             accept_locs=accept_locs,
             reject_locs=reject_locs,
             workers=workers,
