@@ -6,7 +6,7 @@ Thank you for your interest in contributing to OpenApplyPilot. This guide covers
 
 ### Prerequisites
 
-- Python 3.11 or higher
+- uv (the local Python version is selected by `.python-version`)
 - Git
 - Node.js 18+, Chrome, and Claude Code CLI when changing Stage 6
 
@@ -15,23 +15,21 @@ Thank you for your interest in contributing to OpenApplyPilot. This guide covers
 ```bash
 git clone https://github.com/JunoWang/OpenApplyPilot.git
 cd OpenApplyPilot
-python3.11 -m venv .venv
+uv sync --locked --all-extras
+uv run --locked --all-extras playwright install chromium
 source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev,auto-apply]"
-python -m pip install --no-deps python-jobspy
-python -m pip install pydantic tls-client requests markdownify regex
-python -m playwright install chromium
 ```
 
 This installs OpenApplyPilot in editable mode with development and Stage 6 dependencies, then downloads the Chromium browser binary for Playwright.
 
+Keep `pyproject.toml` and `uv.lock` together. After editing dependency declarations, run `uv lock`, sync, and test before committing both files. Use `uv lock --upgrade-package PACKAGE` for intentional upgrades; do not regenerate dependency lists using `pip freeze` from an unrelated environment. The `dev` and `auto-apply` extras are both included by `--all-extras`.
+
 ### Verify Installation
 
 ```bash
-applypilot --version
-python -m pytest -q
-ruff check src tests
+uv run --locked --all-extras applypilot --version
+uv run --locked --all-extras python -m pytest -q
+uv run --locked --all-extras ruff check src tests
 ```
 
 ## How to Contribute

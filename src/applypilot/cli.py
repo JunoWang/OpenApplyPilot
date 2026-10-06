@@ -303,7 +303,7 @@ def apply(
     except ImportError:
         console.print(
             "[red]Auto Apply workflow dependencies are missing.[/red]\n"
-            "Install with [bold]pip install 'applypilot[auto-apply]'[/bold]."
+            "From the checkout, run [bold]uv sync --locked --extra auto-apply[/bold]."
         )
         raise typer.Exit(code=1) from None
 
@@ -498,7 +498,7 @@ def review(
     except ImportError:
         console.print(
             "[red]Auto Apply workflow dependencies are missing.[/red]\n"
-            "Install with [bold]pip install 'applypilot[auto-apply]'[/bold]."
+            "From the checkout, run [bold]uv sync --locked --extra auto-apply[/bold]."
         )
         raise typer.Exit(code=1) from None
 
@@ -589,7 +589,7 @@ def doctor() -> None:
             (
                 "python-jobspy",
                 warn_mark,
-                "pip install --no-deps python-jobspy && pip install pydantic tls-client requests markdownify regex",
+                "From the checkout: uv sync --locked --extra auto-apply",
             )
         )
 
@@ -649,7 +649,7 @@ def doctor() -> None:
             (
                 "LangGraph checkpointing",
                 fail_mark,
-                "pip install 'applypilot[auto-apply]'",
+                "From the checkout: uv sync --locked --extra auto-apply",
             )
         )
 

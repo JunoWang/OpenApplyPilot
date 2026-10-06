@@ -75,7 +75,7 @@ These changes improve correctness, auditability, privacy, and recovery. Their ef
 
 For stages 1-5:
 
-- Python 3.11 or newer
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) for Python and dependency management (`brew install uv` on macOS)
 - Git
 - One LLM provider: an API provider, a local Ollama server, or an installed and authenticated Claude Code/Codex CLI
 
@@ -93,19 +93,30 @@ Claude Code is the current browser agent even when scoring and tailoring use Ope
 git clone https://github.com/JunoWang/OpenApplyPilot.git
 cd OpenApplyPilot
 
-python3.11 -m venv .venv
+uv sync --locked --extra auto-apply
+uv run --locked --extra auto-apply playwright install chromium
 source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[auto-apply]"
-
-# Job-board discovery dependency. See the note below.
-python -m pip install --no-deps python-jobspy
-python -m pip install pydantic tls-client requests markdownify regex
-
-python -m playwright install chromium
 ```
 
-`python-jobspy` currently pins an exact NumPy version in its package metadata. Installing it with `--no-deps` avoids that resolver conflict; the following command installs its runtime dependencies while OpenApplyPilot's normal dependency set supplies pandas and NumPy.
+`pyproject.toml` declares all Python dependencies and `uv.lock` pins their resolved versions. `.python-version` selects Python 3.11 for the default local environment; uv can download it if needed. JobSpy 1.2+ and its dependencies are included, so no separate `pip` or `--no-deps` installation is needed. uv environments do not need the `pip` module.
+
+`auto-apply` adds Stage 6 workflow dependencies; use `uv sync --locked --all-extras` to also install pytest and Ruff for development. Chrome, Node.js/`npx`, Claude Code/Codex CLI, and Playwright browser binaries remain separate system tools/downloads, not Python packages.
+
+For an existing checkout, run the same sync command after pulling changes. If your old `.venv` has mismatched Python versions, deactivate it and move it to a uniquely named backup before syncing. Do not delete your `~/.openapplypilot/` data. `uv sync` reconciles the environment to the selected extras; use `--extra auto-apply` consistently for the full application workflow.
+
+To run without activating the environment, prefix commands with `uv run --locked --extra auto-apply`, for example:
+
+```bash
+uv run --locked --extra auto-apply applypilot doctor
+```
+
+Do not maintain a second hand-written requirements list. If another tool requires one, generate it from the lockfile:
+
+```bash
+uv export --locked --extra auto-apply --no-dev --no-emit-project --format requirements-txt --output-file requirements.txt
+```
+
+That export contains third-party dependencies, not the application itself. Install the checkout separately if using an external pip-based environment.
 
 ### 3. Create the local profile
 
@@ -192,6 +203,7 @@ Complete installation above first. In each new terminal, enter your repository d
 
 ```bash
 cd /path/to/OpenApplyPilot
+uv sync --locked --extra auto-apply
 source .venv/bin/activate
 applypilot doctor
 ```
@@ -331,7 +343,7 @@ This records a manual status; it does not recreate the external browser evidence
 
 | Symptom | What to check |
 |---|---|
-| `applypilot: command not found` | Activate the checkout's `.venv`; install with `python -m pip install -e ".[auto-apply]"` if needed. |
+| `applypilot: command not found` / `No module named pip` | Run `uv sync --locked --extra auto-apply`, then activate `.venv`, or use `uv run --locked --extra auto-apply applypilot ...`. pip is not required. |
 | Missing provider key, Chrome, Claude, or workflow dependency | Run `applypilot doctor`. Stage 6 needs Claude Code even if tailoring uses another provider. |
 | Port already in use | Use `applypilot review --port 8766`, or another unused port. Stop only the server you started. |
 | Saved helper selections are missing from the dashboard | The helper JSON is separate from SQLite; import chosen LinkedIn URLs with `applypilot add`. |
@@ -413,9 +425,9 @@ Use `applypilot COMMAND --help` for every flag.
 Run the test suite with:
 
 ```bash
-python -m pip install -e ".[dev,auto-apply]"
-python -m pytest -q
-ruff check src tests
+uv sync --locked --all-extras
+uv run --locked --all-extras python -m pytest -q
+uv run --locked --all-extras ruff check src tests
 ```
 
 ## License

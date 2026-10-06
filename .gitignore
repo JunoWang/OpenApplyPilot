@@ -20,6 +20,10 @@ logs/
 .mcp*.json
 
 # Python
+.venv/
+.venv.pre-uv-*/
+.pytest_cache/
+.ruff_cache/
 __pycache__/
 *.py[cod]
 *$py.class
