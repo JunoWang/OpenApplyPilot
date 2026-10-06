@@ -217,25 +217,28 @@ TIER_COMMANDS: dict[int, list[str]] = {
 }
 
 
+def _has_llm_configuration() -> bool:
+    from applypilot.llm import LLMConfigurationError, resolve_settings
+
+    try:
+        # A stage-only setup is valid, but all three document stages must resolve.
+        for stage in ("score", "tailor", "cover"):
+            resolve_settings(stage)
+        return True
+    except LLMConfigurationError:
+        return False
+
+
 def get_tier() -> int:
     """Detect the current tier based on available dependencies.
 
     Tier 1 (Discovery):            Python + pip
-    Tier 2 (AI Scoring & Tailoring): + LLM API key
+    Tier 2 (AI Scoring & Tailoring): + configured API/local model or installed CLI provider
     Tier 3 (Full Auto-Apply):       + Claude Code CLI + Chrome
     """
     load_env()
 
-    has_llm = any(
-        os.environ.get(k)
-        for k in (
-            "GEMINI_API_KEY",
-            "OPENAI_API_KEY",
-            "ANTHROPIC_API_KEY",
-            "OLLAMA_BASE_URL",
-            "LLM_URL",
-        )
-    )
+    has_llm = _has_llm_configuration()
     if not has_llm:
         return 1
 
@@ -268,14 +271,7 @@ def check_tier(required: int, feature: str) -> None:
     _console = Console(stderr=True)
 
     missing: list[str] = []
-    llm_keys = (
-        "GEMINI_API_KEY",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "OLLAMA_BASE_URL",
-        "LLM_URL",
-    )
-    if required >= 2 and not any(os.environ.get(key) for key in llm_keys):
+    if required >= 2 and not _has_llm_configuration():
         missing.append("LLM provider — run [bold]applypilot init[/bold] to configure one")
     if required >= 3:
         if not shutil.which("claude"):

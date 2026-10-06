@@ -289,10 +289,10 @@ def _setup_ai_features() -> None:
         console.print("[dim]Discovery-only mode. You can configure AI later with [bold]applypilot init[/bold].[/dim]")
         return
 
-    console.print("Supported providers: [bold]OpenAI, Claude (Anthropic), Gemini, Ollama[/bold]")
+    console.print("Supported providers: [bold]OpenAI, Anthropic, Gemini, Ollama, Claude Code CLI, Codex CLI[/bold]")
     provider = Prompt.ask(
         "Provider",
-        choices=["openai", "anthropic", "gemini", "ollama"],
+        choices=["openai", "anthropic", "gemini", "ollama", "claude_cli", "codex_cli"],
         default="openai",
     )
 
@@ -301,7 +301,12 @@ def _setup_ai_features() -> None:
         f"OPENAPPLYPILOT_LLM_PROVIDER={provider}",
     ]
 
-    if provider == "gemini":
+    if provider in {"claude_cli", "codex_cli"}:
+        model = Prompt.ask("CLI model (default uses the CLI service default)", default="default")
+        env_lines.append(f"OPENAPPLYPILOT_LLM_MODEL={model}")
+        console.print("[dim]No API key needed here. Install and sign in to the selected CLI separately. "
+                      "CLI usage is subject to your account limits.[/dim]")
+    elif provider == "gemini":
         api_key = Prompt.ask("Gemini API key (from aistudio.google.com)", password=True)
         model = Prompt.ask("Model", default="gemini-2.0-flash")
         env_lines.append(f"GEMINI_API_KEY={api_key}")

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -24,7 +25,8 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-SUPPORTED_PROVIDERS = ("openai", "anthropic", "gemini", "ollama", "openai_compatible")
+CLI_PROVIDERS = {"claude_cli": "claude", "codex_cli": "codex"}
+SUPPORTED_PROVIDERS = ("openai", "anthropic", "gemini", "ollama", "openai_compatible", *CLI_PROVIDERS)
 PIPELINE_STAGES = ("discover", "enrich", "score", "tailor", "cover")
 
 _MAX_RETRIES = 5
@@ -37,6 +39,8 @@ _DEFAULT_MODELS = {
     "gemini": "gemini-2.0-flash",
     "ollama": "llama3.2",
     "openai_compatible": "local-model",
+    "claude_cli": "default",
+    "codex_cli": "default",
 }
 
 _DEFAULT_BASE_URLS = {
@@ -155,6 +159,12 @@ def resolve_settings(stage: str | None = None) -> LLMSettings:
         or os.environ.get("LLM_MODEL", "")
         or _DEFAULT_MODELS[provider]
     )
+
+    if provider in CLI_PROVIDERS:
+        executable = shutil.which(CLI_PROVIDERS[provider])
+        if not executable:
+            raise LLMConfigurationError(f"{CLI_PROVIDERS[provider]} CLI is not installed or not on PATH.")
+        return LLMSettings(provider=provider, model=model, base_url="")
 
     if provider == "openai":
         api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -399,6 +409,10 @@ class LLMClient:
             ) from exc
 
     def _chat_once(self, messages: list[dict], temperature: float, max_tokens: int) -> str:
+        if self.provider in CLI_PROVIDERS:
+            from applypilot.cli_llm import chat_cli
+
+            return chat_cli(self.settings, messages, max_tokens=max_tokens)
         if self.provider == "openai":
             return self._chat_openai(messages, temperature, max_tokens)
         if self.provider == "anthropic":

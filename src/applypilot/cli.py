@@ -598,17 +598,21 @@ def doctor() -> None:
 
     from applypilot.llm import LLMConfigurationError, resolve_settings
 
-    try:
-        settings = resolve_settings()
-        results.append(
-            (
-                "LLM provider",
-                ok_mark,
-                f"{settings.provider} ({settings.model})",
+    for stage in ("score", "tailor", "cover"):
+        try:
+            settings = resolve_settings(stage)
+            detail = f"{settings.provider} ({settings.model})"
+            if settings.provider.endswith("_cli"):
+                detail += " — executable found; login/quota not verified"
+            results.append(
+                (
+                    f"LLM {stage}",
+                    ok_mark,
+                    detail,
+                )
             )
-        )
-    except LLMConfigurationError as exc:
-        results.append(("LLM provider", fail_mark, str(exc)))
+        except LLMConfigurationError as exc:
+            results.append((f"LLM {stage}", fail_mark, str(exc)))
 
     # --- Tier 3 checks ---
     # Claude Code CLI
